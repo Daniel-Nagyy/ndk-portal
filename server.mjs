@@ -11,9 +11,11 @@ import { pushConfigured, getVapidPublicKey, addSubscription, removeSubscription,
 import {
   bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount,
-  listUsers, createUser, saveSubscription, changePassword, getUserById
+  listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials
 } from './db.mjs';
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
+import { computeReadiness } from './geotab.mjs';
+import { startHosEngine } from './hos-engine.mjs';
 dotenv.config();
 
 // Seed superadmin + migrate env account into the DB on first run.
@@ -867,166 +869,52 @@ const requestHandler = (req, res) => {  // CORS Headers
   if (url.pathname === '/api/drivers-readiness' && (req.method === 'GET' || req.method === 'POST')) {
     (async () => {
       try {
-        let account = null;
-        if (req.method === 'GET') {
-          const accountId = String(url.searchParams.get('accountId') || '').trim();
-          if (accountId) {
-            account = GEOTAB_ACCOUNTS.find((item) => item.id === accountId);
-            if (!account) throw new Error(`Unknown Geotab account: ${accountId}`);
+        const authUser = getAuthUser(req);
+        let creds = null;
+        let accountLabel = null;
+
+        // 1. Logged-in user's own account (multi-tenant default).
+        if (authUser && authUser.account_id) {
+          const c = getAccountCredentials(authUser.account_id);
+          if (c && c.geotab.database && c.geotab.username) {
+            creds = c.geotab; accountLabel = { id: c.id, name: c.name };
           }
         }
-
-        let credentials = null;
-        if (req.method === 'POST') {
+        // 2. superadmin (or GET) may request a specific DB account via ?accountId.
+        if (!creds) {
+          const reqAccountId = String(url.searchParams.get('accountId') || '').trim();
+          if (reqAccountId) {
+            const c = getAccountCredentials(reqAccountId);
+            if (c && c.geotab.database) { creds = c.geotab; accountLabel = { id: c.id, name: c.name }; }
+          }
+        }
+        // 3. POSTed credentials (backward compatibility).
+        if (!creds && req.method === 'POST') {
           const body = await readJsonBody(req);
-          credentials = body.credentials || body;
-        }
-
-        if (!account && credentials) {
-          account = normalizeAccount(credentials, "posted-account");
-        }
-        if (!account) {
-          account = GEOTAB_ACCOUNTS[0] || null;
-        }
-        requireConfiguredAccount(account);
-
-        const auth = await authenticate({
-          database: account.database,
-          userName: account.username,
-          password: account.password,
-          server: account.server
-        });
-        const geotabCredentials = auth.credentials;
-
-        const users = await geotabCallWithRetry('Get', {
-          typeName: 'User',
-          credentials: geotabCredentials
-        }, { retries: 2, delayMs: 400, account });
-
-        const now = new Date();
-        const seen = new Set();
-        const drivers = (Array.isArray(users) ? users : []).filter((user) => {
-          if (!user || !user.id || !user.isDriver) return false;
-          const key = typeof user.id === 'string' ? user.id : JSON.stringify(user.id);
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-
-        const rows = await Promise.all(drivers.map(async (user) => {
-          const name = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.name || user.userName || 'Unknown Driver';
-          const [logsResult, availability] = await Promise.all([
-            getDriverLogs(geotabCredentials, user.id),
-            getDriverAvailability(geotabCredentials, user.id)
-          ]);
-
-          let finalLogs = logsResult.logs;
-          let finalLogsError = logsResult.logsError;
-          const availabilityError = availability.availabilityError || null;
-// --- Discard any log older than 30 days, even if Geotab returns them ---
-const MAX_LOG_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-finalLogs = (finalLogs || []).filter((log) => {
-  const logTime = new Date(log.dateTime).getTime();
-  return !isNaN(logTime) && (now.getTime() - logTime <= MAX_LOG_AGE_MS);
-});
-if (finalLogsError) {
-  try {
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    finalLogs = await geotabCallWithRetry("Get", {
-      typeName: "DutyStatusLog",
-      credentials: geotabCredentials,
-      search: {
-        userSearch: { id: user.id },
-        fromDate: thirtyDaysAgo.toISOString()    // ✅ only recent logs
-      }
-    }, { retries: 1, delayMs: 700, account });
-    finalLogsError = null;
-  } catch (error) {
-    finalLogsError = simplifyError(error);
-  }
-}
-
-          if (finalLogsError) {
-            return {
-              id: user.id,
-              driverName: name,
-              status: 'Error',
-              vehicle: null,
-              activeTripId: null,
-              lastStatusChange: null,
-              breakTime: availability.breakDisplay,
-              driving: availability.drivingDisplay,
-              duty: availability.dutyDisplay,
-              workday: availability.workdayDisplay,
-              cycle: availability.cycleRemainingDisplay,
-              updatedAt: new Date().toISOString(),
-              clientId: null,
-              currentStatus: 'Error',
-              cycleRemainingDisplay: availability.cycleRemainingDisplay,
-              cycleTomorrowDisplay: availability.cycleTomorrowDisplay,
-              drivingDisplay: availability.drivingDisplay,
-              dutyDisplay: availability.dutyDisplay,
-              workdayDisplay: availability.workdayDisplay,
-              breakDisplay: availability.breakDisplay,
-              cycleResetDisplay: availability.cycleResetDisplay ?? '--',
-              note: finalLogsError ? `Logs: ${finalLogsError} ${availabilityError ? `| Avail: ${availabilityError}` : ''}` : null,
-              statusSinceDisplay: null,
-              statusSinceIso: null,
-              readiness: 'NO LOGS'
-            };
+          const b = body.credentials || body;
+          if (b && b.database && (b.username || b.userName)) {
+            creds = { server: b.server, database: b.database, username: b.username || b.userName, password: b.password };
           }
+        }
+        // 4. env-configured account (legacy fallback).
+        if (!creds) {
+          const envAcct = GEOTAB_ACCOUNTS[0];
+          if (envAcct) {
+            creds = { server: envAcct.server, database: envAcct.database, username: envAcct.username, password: envAcct.password };
+            accountLabel = { id: envAcct.id, name: envAcct.name };
+          }
+        }
+        if (!creds) throw new Error('No Geotab account configured for this user');
 
-          const row = buildRow(user, finalLogs, now, availability, availabilityError ? `Availability: ${availabilityError}` : null);
-          return {
-            id: row.id,
-            driverName: row.name,
-            status: row.currentStatus,
-            activityStatus: row.currentStatus,
-            vehicle: null,
-            activeTripId: null,
-            lastStatusChange: row.lastRestStartIso || row.lastRestStart || null,
-            breakTime: row.breakDisplay,
-            driving: row.drivingDisplay,
-            duty: row.dutyDisplay,
-            workday: row.workdayDisplay,
-            cycle: row.cycleRemainingDisplay,
-            updatedAt: new Date().toISOString(),
-            clientId: null,
-            currentStatus: row.currentStatus,
-            cycleRemainingDisplay: row.cycleRemainingDisplay,
-            cycleTomorrowDisplay: row.cycleTomorrowDisplay,
-            drivingDisplay: row.drivingDisplay,
-            dutyDisplay: row.dutyDisplay,
-            workdayDisplay: row.workdayDisplay,
-            breakDisplay: row.breakDisplay,
-            cycleResetDisplay: row.cycleResetDisplay,
-            remainingDisplay: row.remainingDisplay,
-            statusSinceDisplay: row.statusSinceDisplay,
-            statusSinceIso: row.statusSinceIso,
-            note: row.note,
-            readiness: row.readiness
-          };
-        }));
-
-        rows.sort((a, b) => String(a.driverName || '').localeCompare(String(b.driverName || '')));
-        const summary = {
-          ready: rows.filter((row) => row.readiness === 'READY').length,
-          notReady: rows.filter((row) => row.readiness === 'NOT READY').length,
-          noLogs: rows.filter((row) => row.readiness === 'NO LOGS').length
-        };
-
-        processHosTelegramAlerts(rows).catch((error) => {
-          console.warn("HOS Telegram alert error:", error.message || error);
-        });
-
+        const result = await computeReadiness(creds);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
-          totalDrivers: rows.length,
-          generatedAt: new Date().toISOString(),
-          account: publicAccount(account),
-          summary,
-          drivers: rows
+          totalDrivers: result.totalDrivers,
+          generatedAt: result.generatedAt,
+          account: accountLabel,
+          summary: result.summary,
+          drivers: result.drivers
         }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1220,21 +1108,7 @@ server.listen(port, "0.0.0.0", () => {
     console.log("HOS Telegram alerts: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env)");
   }
 
-  const pollMs = Number(process.env.HOS_ALERT_POLL_MS || 120000);
-  if (GEOTAB_ACCOUNTS.length) {
-    setInterval(async () => {
-      try {
-const response = await fetch(`${useHttp ? "http" : "https"}://127.0.0.1:${port}/api/drivers-readiness`, {
-  rejectUnauthorized: false   // allow self-signed cert
-});        if (!response.ok) return;
-        const payload = await response.json();
-        if (payload.success && Array.isArray(payload.drivers)) {
-          await processHosTelegramAlerts(payload.drivers);
-        }
-      } catch (error) {
-        console.warn("HOS alert poll failed:", error.message || error);
-      }
-    }, pollMs);
-  }
+  // Per-account HOS alert engine (Geotab → push + Telegram, 60 & 30 min thresholds).
+  startHosEngine();
 });
 startPolling();
