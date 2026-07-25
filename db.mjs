@@ -7,6 +7,12 @@ import { encrypt, decrypt } from "./crypto.mjs";
 dotenv.config();
 
 const DB_PATH = process.env.DB_PATH || "ndk-portal.db";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+const dbDir = dirname(DB_PATH);
+if (dbDir && dbDir !== ".") {
+  mkdirSync(dbDir, { recursive: true });
+}
 export const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
@@ -259,19 +265,24 @@ export function bootstrap() {
     console.warn("No SUPERADMIN_EMAIL/PASSWORD set — no admin user created.");
   }
 
-  // 2. Migrate the existing Mako Waves account from env, if present.
-  if (process.env.GEOTAB_ACCOUNT_1_DATABASE || process.env.NETRADYNE_EMAIL) {
-    const acct = createAccount({
-      name: process.env.GEOTAB_ACCOUNT_1_NAME || "Mako Waves Distribution",
-      geotabServer: process.env.GEOTAB_ACCOUNT_1_SERVER,
-      geotabDatabase: process.env.GEOTAB_ACCOUNT_1_DATABASE,
-      geotabUsername: process.env.GEOTAB_ACCOUNT_1_USERNAME,
-      geotabPassword: process.env.GEOTAB_ACCOUNT_1_PASSWORD,
-      netradyneEmail: process.env.NETRADYNE_EMAIL,
-      netradynePassword: process.env.NETRADYNE_PASSWORD,
-      netradynePollMs: Number(process.env.NETRADYNE_POLL_INTERVAL_MS) || 300000,
-    });
-    console.log(`Migrated account from env: ${acct.name} (${acct.id})`);
+  // 2. Migrate accounts from env (supports multiple accounts: GEOTAB_ACCOUNT_1_*, GEOTAB_ACCOUNT_2_*, etc.)
+  for (let i = 1; i <= 10; i++) {
+    const prefix = `GEOTAB_ACCOUNT_${i}_`;
+    const netradyneprefix = i === 1 ? "NETRADYNE_" : `NETRADYNE_${i}_`;
+
+    if (process.env[`${prefix}DATABASE`] || process.env[`${netradyneprefix}EMAIL`]) {
+      const acct = createAccount({
+        name: process.env[`${prefix}NAME`] || `Account ${i}`,
+        geotabServer: process.env[`${prefix}SERVER`],
+        geotabDatabase: process.env[`${prefix}DATABASE`],
+        geotabUsername: process.env[`${prefix}USERNAME`],
+        geotabPassword: process.env[`${prefix}PASSWORD`],
+        netradyneEmail: process.env[`${netradyneprefix}EMAIL`],
+        netradynePassword: process.env[`${netradyneprefix}PASSWORD`],
+        netradynePollMs: Number(process.env[`${netradyneprefix}POLL_INTERVAL_MS`]) || 300000,
+      });
+      console.log(`Migrated account from env: ${acct.name} (${acct.id})`);
+    }
   }
 
   return { seeded: true };
