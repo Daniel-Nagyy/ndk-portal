@@ -11,6 +11,13 @@ import { NETRADYNE } from './config.js';
 import { listAccounts, getAccountCredentials } from '../db.mjs';
 
 const running = new Set(); // accountIds currently mid-poll
+const status = new Map(); // accountId -> diagnostic status (for /api/netradyne/status)
+
+export function getNetradyneStatus() {
+  const out = {};
+  for (const [id, s] of status) out[id] = s;
+  return out;
+}
 
 // Only notify alerts that occurred recently, so a restart (in-memory store resets)
 // doesn't re-blast every alert from earlier today. Dedup still prevents repeats.
@@ -19,19 +26,28 @@ const FRESH_MS = Number(process.env.NETRADYNE_ALERT_FRESH_MS) || 20 * 60 * 1000;
 async function pollAccount(account) {
   if (running.has(account.id)) return;
   running.add(account.id);
+  const s = status.get(account.id) || {};
   try {
     const ctx = await getAuthenticatedContext(account);
+    s.loginOk = true;
     const raw = await scrapeAlerts(ctx);
+    s.lastScrapedCount = raw.length;
     const added = addAlerts(account.id, raw);
     const now = Date.now();
     const fresh = added.filter((a) => a.occurredAt && (now - new Date(a.occurredAt).getTime()) <= FRESH_MS);
+    s.lastNotifiedCount = fresh.length;
+    s.lastError = null;
     if (fresh.length > 0) {
       log.info(`[${account.id}] ${fresh.length} new alert(s) to notify (${added.length} added total)`);
       await notifyAlerts(account, fresh);
     }
   } catch (err) {
+    s.loginOk = false;
+    s.lastError = err.message;
     log.error(`[${account.id}] poll failed: ${err.message}`);
   } finally {
+    s.lastPollAt = new Date().toISOString();
+    status.set(account.id, s);
     running.delete(account.id);
   }
 }

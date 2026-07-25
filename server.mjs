@@ -4,7 +4,7 @@ import { createServer as createHttpServer } from "node:http";
 import { readFileSync } from "node:fs";import { extname, join, normalize } from "node:path";
 import dotenv from "dotenv";
 import { processHosTelegramAlerts, sendTelegramMessage } from "./hos-alerts.mjs";
-import { startPolling } from './netradyne/poller.js';
+import { startPolling, getNetradyneStatus } from './netradyne/poller.js';
 import { getAlerts, updateAlertStatus } from './netradyne/store.js';
 import { getAuthenticatedContext } from './netradyne/auth.js';
 import { pushConfigured, getVapidPublicKey, removeSubscription, subscriptionCount } from './push.mjs';
@@ -610,6 +610,32 @@ const requestHandler = (req, res) => {  // CORS Headers
         res.end(JSON.stringify({ success: false, error: simplifyError(error) }));
       }
     })();
+    return;
+  }
+
+  // Diagnostics: is the Netradyne poller logging in and collecting alerts per account?
+  if (url.pathname === '/api/netradyne/status' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser || authUser.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+    const st = getNetradyneStatus();
+    const accounts = listAccounts().map((a) => {
+      const c = getAccountCredentials(a.id);
+      const s = st[a.id] || {};
+      return {
+        account: a.name,
+        id: a.id,
+        hasNetradyneCreds: Boolean(c && c.netradyne.email && c.netradyne.password),
+        pollMs: c ? c.netradyne.pollMs : null,
+        lastPollAt: s.lastPollAt || null,
+        loginOk: s.loginOk ?? null,
+        lastScrapedCount: s.lastScrapedCount ?? null,   // alerts pulled from Netradyne
+        lastNotifiedCount: s.lastNotifiedCount ?? null,  // fresh alerts that fired notifications
+        lastError: s.lastError || null,
+        storedAlerts: getAlerts(a.id).length,
+        pushSubscribers: getSubscriptionsForAccount(a.id).length,
+      };
+    });
+    sendJson(200, { success: true, netradyneEnabled: process.env.NETRADYNE_ENABLED !== '0', accounts });
     return;
   }
 
