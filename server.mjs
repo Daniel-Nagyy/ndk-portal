@@ -7,17 +7,17 @@ import { processHosTelegramAlerts, sendTelegramMessage } from "./hos-alerts.mjs"
 import { startPolling } from './netradyne/poller.js';
 import { getAlerts, updateAlertStatus } from './netradyne/store.js';
 import { getAuthenticatedContext } from './netradyne/auth.js';
-import { pushConfigured, getVapidPublicKey, addSubscription, removeSubscription, sendPushToAll, subscriptionCount } from './push.mjs';
+import { pushConfigured, getVapidPublicKey, removeSubscription, subscriptionCount } from './push.mjs';
 import {
   bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
-  getSubscriptionsForAccount
+  getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint
 } from './db.mjs';
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
 import { startHosEngine } from './hos-engine.mjs';
-import { notifyAccount } from './notify.mjs';
+import { notifyAccount, sendPushToAccount } from './notify.mjs';
 dotenv.config();
 
 // Seed superadmin + migrate env account into the DB on first run.
@@ -363,6 +363,40 @@ const requestHandler = (req, res) => {  // CORS Headers
     return;
   }
 
+  // Diagnostics: which device (endpoint) is subscribed under which account.
+  if (url.pathname === '/api/push/debug' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser || authUser.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+    const subs = listAllSubscriptions().map((s) => ({
+      account: s.accountId,
+      user: s.email,
+      endpoint: `${String(s.endpoint).slice(0, 55)}…`,
+    }));
+    const byAccount = {};
+    for (const s of subs) byAccount[s.account || 'null'] = (byAccount[s.account || 'null'] || 0) + 1;
+    sendJson(200, { success: true, total: subs.length, byAccount, fileStore: subscriptionCount(), subscriptions: subs });
+    return;
+  }
+
+  // Cleanup: remove a subscription by endpoint (superadmin), e.g. a mis-tagged one.
+  if (url.pathname === '/api/push/remove' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser || authUser.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+        const body = await readJsonBody(req);
+        const endpoint = body.endpoint;
+        if (!endpoint) return sendJson(400, { success: false, error: 'endpoint required' });
+        deleteSubscriptionByEndpoint(endpoint);
+        removeSubscription(endpoint); // also drop from the legacy file store
+        sendJson(200, { success: true });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
   if (url.pathname === '/api/notify' && req.method === 'POST') {
     (async () => {
       try {
@@ -396,18 +430,15 @@ const requestHandler = (req, res) => {  // CORS Headers
       try {
         const body = await readJsonBody(req);
         const sub = body.subscription || body;
-        const result = addSubscription(sub);
-        // Also associate with the logged-in user/account for per-account routing (Phase 2).
+        // Subscriptions are strictly account-scoped: a device must be tied to the
+        // logged-in user's account so alerts never cross accounts.
         const user = getAuthUser(req);
-        if (user && sub && sub.endpoint) {
-          try { saveSubscription(user.id, user.account_id, sub); }
-          catch (e) { console.warn('saveSubscription failed:', e.message || e); }
-        }
-        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: result.ok, ...result }));
+        if (!user) return sendJson(401, { success: false, error: 'Log in before enabling notifications' });
+        if (!sub || !sub.endpoint) return sendJson(400, { success: false, error: 'Invalid subscription' });
+        saveSubscription(user.id, user.account_id, sub);
+        sendJson(200, { success: true, account: user.account_id });
       } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: simplifyError(error) }));
+        sendJson(500, { success: false, error: simplifyError(error) });
       }
     })();
     return;
@@ -432,18 +463,19 @@ const requestHandler = (req, res) => {  // CORS Headers
   if (url.pathname === '/api/push/test' && req.method === 'POST') {
     (async () => {
       try {
+        // Account-scoped: only sends to the logged-in user's own account.
+        const user = getAuthUser(req);
+        if (!user || !user.account_id) return sendJson(401, { success: false, error: 'Log in as an account user' });
         const body = await readJsonBody(req);
-        const result = await sendPushToAll({
+        const result = await sendPushToAccount(user.account_id, {
           title: body.title || 'NDK test alert',
           body: body.body || 'If you can see this with the app closed, push works.',
           requireInteraction: true,
           url: '/index.html',
         });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, subscriptions: subscriptionCount(), ...result }));
+        sendJson(200, { success: true, account: user.account_id, ...result });
       } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: simplifyError(error) }));
+        sendJson(500, { success: false, error: simplifyError(error) });
       }
     })();
     return;

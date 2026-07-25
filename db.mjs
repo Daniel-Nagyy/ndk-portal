@@ -250,6 +250,15 @@ export function getSubscriptionsForUser(userId) {
     .map((r) => JSON.parse(r.sub_json));
 }
 
+// Diagnostics: every subscription with its account + owning user's email.
+export function listAllSubscriptions() {
+  return db.prepare(
+    `SELECT s.account_id AS accountId, s.endpoint AS endpoint, u.email AS email
+     FROM push_subscriptions s LEFT JOIN users u ON u.id = s.user_id
+     ORDER BY s.account_id`
+  ).all();
+}
+
 // ---------- First-run bootstrap ----------
 export function bootstrap() {
   const userCount = db.prepare("SELECT COUNT(*) c FROM users").get().c;
