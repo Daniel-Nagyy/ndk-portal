@@ -1,21 +1,12 @@
-// netradyne/store.js
+// netradyne/store.js — in-memory alert store, partitioned by account.
+import crypto from 'node:crypto';
 
-const alerts = [];
+const alerts = []; // each alert carries an accountId
 
-/* -------------------------------------------------- */
-/*  Seed data – remove after testing                  */
-/* -------------------------------------------------- */
-const now = Date.now();
-
-
-/* -------------------------------------------------- */
-/*  Store logic                                       */
-/* -------------------------------------------------- */
-
-export function getAlerts() {
-  return alerts;
+export function getAlerts(accountId) {
+  return accountId ? alerts.filter(a => a.accountId === accountId) : alerts;
 }
-// netradyne/store.js (append at the end)
+
 export function updateAlertStatus(id, newStatus) {
   const alert = alerts.find(a => a.id === id);
   if (alert) {
@@ -25,10 +16,13 @@ export function updateAlertStatus(id, newStatus) {
   }
   return null;
 }
-export function addAlerts(newAlerts) {
+
+// Dedupe within an account by externalAlertId; tags each alert with accountId.
+export function addAlerts(accountId, newAlerts) {
   const added = [];
   for (const alert of newAlerts) {
-    if (!alerts.some(a => a.externalAlertId === alert.externalAlertId)) {
+    if (!alerts.some(a => a.accountId === accountId && a.externalAlertId === alert.externalAlertId)) {
+      alert.accountId = accountId;
       alert.id = alert.id || crypto.randomUUID();
       alert.createdAt = alert.createdAt || new Date().toISOString();
       alerts.push(alert);
@@ -38,7 +32,7 @@ export function addAlerts(newAlerts) {
   return added;
 }
 
-// Keep only last 1000 alerts to limit memory
+// Keep only the most recent 1000 alerts to bound memory.
 setInterval(() => {
   if (alerts.length > 1000) alerts.splice(0, alerts.length - 1000);
 }, 60000);

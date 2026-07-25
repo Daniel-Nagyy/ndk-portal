@@ -42,17 +42,23 @@ export async function scrapeAlerts(context) {
   const page = await context.newPage();
   try {
     await page.goto(NETRADYNE.url, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.waitForTimeout(3000);
 
-    // ---- Aggressive overlay removal ----
+    // ---- Aggressive overlay/modal removal ----
+    // NOTE: Netradyne now shows a "Smart View" and a "new-joiner-mandate" welcome
+    // modal that intercepts clicks; remove those plus the usual tour overlays.
     await page.evaluate(() => {
       const removals = [
         '.modal-backdrop', '.modal', '.cdk-overlay-container',
+        '.new-joiner-mandate-modal', '[uib-modal-window]',
         '[class*="overlay"]', '[class*="popup"]', '.tour-overlay',
         '.onboarding-overlay', '.ui-widget-overlay',
       ];
       removals.forEach(sel => {
         document.querySelectorAll(sel).forEach(el => el.remove());
       });
+      // Remove any leftover fixed/dialog backdrops.
+      document.querySelectorAll('[role="dialog"]').forEach(el => el.remove());
     });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
@@ -72,11 +78,18 @@ export async function scrapeAlerts(context) {
       log.warn('Time range selection failed, using current view');
     }
 
-    // ---- Wait for alert items to exist ----
-    await page.waitForFunction(
+    // ---- Wait for alert rows (legacy Expanded-View format) ----
+    // The redesigned "Smart View" does not use this row format; if no rows appear
+    // (either no alerts, or the new UI), return [] instead of throwing so the
+    // poller never crashes. TODO: implement Smart-View extraction.
+    const hasRows = await page.waitForFunction(
       () => document.querySelectorAll('ul.alerts-div > li.alerts-page-li').length > 0,
       { timeout: 20000 }
-    );
+    ).then(() => true).catch(() => false);
+    if (!hasRows) {
+      log.warn('No legacy alert rows found (redesigned UI or no alerts) — returning 0 alerts');
+      return [];
+    }
 
     // ---- Extract alerts using innerText parsing ----
     const alerts = await page.evaluate(() => {

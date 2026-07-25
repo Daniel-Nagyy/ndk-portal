@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";import { extname, join, normalize } from 
 import dotenv from "dotenv";
 import { processHosTelegramAlerts, sendTelegramMessage } from "./hos-alerts.mjs";
 import { startPolling } from './netradyne/poller.js';
-import { getAlerts } from './netradyne/store.js';
-import {addAlerts, updateAlertStatus } from './netradyne/store.js';
+import { getAlerts, updateAlertStatus } from './netradyne/store.js';
+import { getAuthenticatedContext } from './netradyne/auth.js';
 import { pushConfigured, getVapidPublicKey, addSubscription, removeSubscription, sendPushToAll, subscriptionCount } from './push.mjs';
 import {
   bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
@@ -988,16 +988,21 @@ const requestHandler = (req, res) => {  // CORS Headers
     return;
   }
 
-  // ---------- Netradyne API ----------
+  // ---------- Netradyne API (account-scoped) ----------
   if (url.pathname === '/api/netradyne/alerts' && req.method === 'GET') {
-    const alerts = getAlerts();
+    const authUser = getAuthUser(req);
+    // superadmin sees all; account users see only their account's alerts.
+    const scope = authUser && authUser.role !== 'superadmin' ? authUser.account_id : null;
+    const alerts = getAlerts(scope);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true, alerts }));
     return;
   }
 
   if (url.pathname === '/api/netradyne/summary' && req.method === 'GET') {
-    const alerts = getAlerts();
+    const authUser = getAuthUser(req);
+    const scope = authUser && authUser.role !== 'superadmin' ? authUser.account_id : null;
+    const alerts = getAlerts(scope);
     const now = new Date();
     const summary = {
       today: alerts.filter(a => new Date(a.occurredAt) > new Date(now).setHours(0,0,0,0)).length,
@@ -1059,7 +1064,12 @@ if (url.pathname.startsWith('/api/netradyne/alerts/') && req.method === 'PATCH')
 if (url.pathname === '/api/netradyne/debug' && req.method === 'GET') {
   (async () => {
     try {
-      const ctx = await getAuthenticatedContext();
+      const authUser = getAuthUser(req);
+      const accountId = url.searchParams.get('accountId') || authUser?.account_id;
+      if (!accountId) throw new Error('No account for Netradyne debug');
+      const c = getAccountCredentials(accountId);
+      if (!c || !c.netradyne.email) throw new Error('Account has no Netradyne credentials');
+      const ctx = await getAuthenticatedContext({ id: c.id, netradyneEmail: c.netradyne.email, netradynePassword: c.netradyne.password });
       const page = await ctx.newPage();
       await page.goto('https://idms.netradyne.com/console/#/alerts', { waitUntil: 'networkidle' });
       // Wait for any alert rows or container to appear

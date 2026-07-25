@@ -1,100 +1,94 @@
+// netradyne/auth.js — per-account authenticated Playwright contexts.
 import { chromium } from 'playwright';
-import { existsSync, rmSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { NETRADYNE } from './config.js';
 import { log } from './logger.js';
 
-const BROWSER_DIR = './netradyne-browser-data';
+const BASE_DIR = './netradyne-browser-data';
+const contexts = new Map(); // accountId -> persistent context (session reused across polls)
 
-function cleanBrowserData() {
-  if (existsSync(BROWSER_DIR)) {
-    rmSync(BROWSER_DIR, { recursive: true, force: true });
-    log.info('Cleared browser session data');
-  }
+function dirFor(accountId) {
+  return join(BASE_DIR, accountId);
 }
 
-export async function getAuthenticatedContext() {
-  // 1. If a context exists, try to reuse it
-  if (global.__netradyneContext) {
-    try {
-      const page = await global.__netradyneContext.newPage();
-      await page.goto(NETRADYNE.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      const isLoggedIn = !(await page.$('#loginUserName')) && !(await page.$('text=Sign In'));
-      await page.close();
-      if (isLoggedIn) {
-        log.info('Netradyne session reused');
-        return global.__netradyneContext;
-      }
-    } catch (e) {
-      log.warn('Session check failed, re‑authenticating');
-    }
-    // Session invalid – close and clean
-    await global.__netradyneContext.close().catch(() => {});
-    global.__netradyneContext = null;
-    cleanBrowserData();
-  }
-
-  // 2. Create a new persistent context
-  const context = await chromium.launchPersistentContext(BROWSER_DIR, {
+async function launch(accountId) {
+  const dir = dirFor(accountId);
+  mkdirSync(dir, { recursive: true });
+  return chromium.launchPersistentContext(dir, {
     headless: true,
     args: ['--no-sandbox'],
   });
+}
 
-  const page = await context.newPage();
-  try {
-    await page.goto('https://idms.netradyne.com', { waitUntil: 'networkidle', timeout: 30000 });
+// account = { id, netradyneEmail, netradynePassword }
+export async function getAuthenticatedContext(account) {
+  const accountId = account.id;
 
-    // 3. Wait for the login form to appear
+  // 1. Reuse an in-process context if it's still logged in.
+  const existing = contexts.get(accountId);
+  if (existing) {
     try {
-      await page.waitForSelector('#loginUserName:visible', { timeout: 10000 });
-    } catch (err) {
-      // Login form didn't appear – session data corrupted, start over
-      log.warn('Login form not found – removing session data and retrying');
+      const page = await existing.newPage();
+      await page.goto(NETRADYNE.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.waitForTimeout(1500);
+      const needsLogin = await page.$('#loginUserName');
       await page.close().catch(() => {});
-      await context.close().catch(() => {});
-      cleanBrowserData();
-      const freshContext = await chromium.launchPersistentContext(BROWSER_DIR, {
-        headless: true,
-        args: ['--no-sandbox'],
-      });
-      const freshPage = await freshContext.newPage();
-      await freshPage.goto('https://idms.netradyne.com', { waitUntil: 'networkidle', timeout: 30000 });
-      await freshPage.waitForSelector('#loginUserName:visible', { timeout: 10000 });
-      // Continue with the fresh page/context
-      global.__netradyneContext = freshContext;
-      await login(freshPage);
-      return freshContext;
+      if (!needsLogin) { log.info(`[${accountId}] session reused`); return existing; }
+    } catch (e) {
+      log.warn(`[${accountId}] session check failed, re-authenticating`);
     }
+    await existing.close().catch(() => {});
+    contexts.delete(accountId);
+  }
 
-    // Login with the original page
-    await login(page);
-    global.__netradyneContext = context;
+  // 2. Launch the persistent context. If the saved session is still valid the app
+  //    loads without a login form; otherwise the login form appears and we sign in.
+  const context = await launch(accountId);
+  try {
+    const page = await context.newPage();
+    await page.goto(NETRADYNE.url, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.waitForTimeout(2000);
+    if (await page.$('#loginUserName')) {
+      await login(page, account);
+    } else {
+      log.info(`[${accountId}] existing Netradyne session valid`);
+    }
+    await page.close().catch(() => {});
+    contexts.set(accountId, context);
     return context;
   } catch (err) {
-    log.error('Authentication failed: ' + err.message);
+    log.error(`[${accountId}] authentication failed: ${err.message}`);
     await context.close().catch(() => {});
     throw err;
   }
 }
 
-async function login(page) {
-  // Fill username
-  await page.fill('#loginUserName', NETRADYNE.email);
+async function login(page, account) {
+  // Step 1: username, then "Next".
+  await page.fill('#loginUserName', account.netradyneEmail);
+  await page.click('#login-submit-button');
 
-  // Two‑step: click “Next” if visible
-  const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue")').first();
-  if (await nextBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await nextBtn.click();
-    await page.waitForTimeout(2000);
-  }
-
-  // Fill password
+  // Step 2: password, then "Login".
   await page.waitForSelector('input[name="pwd"]:visible', { timeout: 10000 });
-  await page.fill('input[name="pwd"]', NETRADYNE.password);
+  await page.fill('input[name="pwd"]', account.netradynePassword);
+  await page.click('#login-submit-button');
 
-  // Submit
-  await page.click('button[type="submit"]');
-
-  // Wait for console
-  await page.waitForURL('**/console/**', { timeout: 15000 });
-  log.info('Netradyne authenticated successfully');
+  // Success = we leave the login screen (password field gone AND URL not on /login).
+  // NOTE: the login page URL itself contains "/console/", so we must not match on that.
+  try {
+    await page.waitForFunction(() => {
+      const onLogin = location.href.includes('/login');
+      const hasPwd = !!document.querySelector('input[name="pwd"]');
+      return !onLogin && !hasPwd;
+    }, { timeout: 20000 });
+  } catch (err) {
+    // Still on the login screen after submit → bad credentials or a challenge.
+    const errText = await page.evaluate(() => {
+      const m = (document.body.innerText || '').match(/(invalid|incorrect|not found|wrong|failed|locked|expired|try again)[^\n]*/i);
+      return m ? m[0] : null;
+    }).catch(() => null);
+    throw new Error(`login not accepted${errText ? ` (${errText})` : ' (still on login screen)'}`);
+  }
+  log.info(`[${account.id}] Netradyne authenticated`);
 }
