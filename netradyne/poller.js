@@ -12,6 +12,10 @@ import { listAccounts, getAccountCredentials } from '../db.mjs';
 
 const running = new Set(); // accountIds currently mid-poll
 
+// Only notify alerts that occurred recently, so a restart (in-memory store resets)
+// doesn't re-blast every alert from earlier today. Dedup still prevents repeats.
+const FRESH_MS = Number(process.env.NETRADYNE_ALERT_FRESH_MS) || 20 * 60 * 1000;
+
 async function pollAccount(account) {
   if (running.has(account.id)) return;
   running.add(account.id);
@@ -19,9 +23,11 @@ async function pollAccount(account) {
     const ctx = await getAuthenticatedContext(account);
     const raw = await scrapeAlerts(ctx);
     const added = addAlerts(account.id, raw);
-    if (added.length > 0) {
-      log.info(`[${account.id}] ${added.length} new alerts`);
-      await notifyAlerts(account, added);
+    const now = Date.now();
+    const fresh = added.filter((a) => a.occurredAt && (now - new Date(a.occurredAt).getTime()) <= FRESH_MS);
+    if (fresh.length > 0) {
+      log.info(`[${account.id}] ${fresh.length} new alert(s) to notify (${added.length} added total)`);
+      await notifyAlerts(account, fresh);
     }
   } catch (err) {
     log.error(`[${account.id}] poll failed: ${err.message}`);

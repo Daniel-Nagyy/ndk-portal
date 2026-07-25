@@ -1,190 +1,58 @@
-// netradyne/scraper.js
+// netradyne/scraper.js — collect alerts via Netradyne's own REST API.
+// Instead of scraping the DOM (brittle, changes with every UI redesign), we load
+// the alerts page and capture the authenticated `alertsDataLite` response the
+// Angular app itself makes. This is far more robust and needs no token handling.
 import { NETRADYNE } from './config.js';
 import { log } from './logger.js';
 
-/**
- * Parse a combined time‑date string into ISO format.
- * Handles formats like:
- *   "03:02:56 AM PDT Jun 23 2026"
- *   "03:02:56 AM PDT\nJun 23 2026"
- *   "11:37:08 PM PDT Jun 22 2026"
- */
-function robustParseDate(fullText) {
-  if (!fullText) return '';
-
-  // Clean up multiple spaces and newlines
-  const cleaned = fullText.replace(/\s+/g, ' ').trim();
-
-  // Try to match "HH:MM:SS AM/PM TZ Mon DD YYYY" (the exact Netradyne pattern)
-  const match = cleaned.match(
-    /(\d{1,2}:\d{2}:\d{2}\s*[AP]M)\s*[A-Z]{3,4}\s*([A-Z][a-z]{2}\s*\d{1,2}\s*\d{4})/i
-  );
-  if (match) {
-    const timePart = match[1];   // "03:02:56 AM"
-    const datePart = match[2];   // "Jun 23 2026"
-    const d = new Date(`${datePart} ${timePart}`);
-    if (!isNaN(d.getTime())) return d.toISOString();
-  }
-
-  // Fallback: try any recognizable date near a time
-  const timeMatch = cleaned.match(/(\d{1,2}:\d{2}:\d{2}\s*[AP]M)/i);
-  const dateMatch = cleaned.match(/([A-Z][a-z]{2}\s*\d{1,2},?\s*\d{4})/i);
-  if (timeMatch && dateMatch) {
-    const d = new Date(`${dateMatch[0].replace(',', '')} ${timeMatch[0]}`);
-    if (!isNaN(d.getTime())) return d.toISOString();
-  }
-
-  // If all else fails, return the cleaned text
-  return cleaned;
-}
+const ALERTS_API_RE = /\/tenants\/\d+\/alertsDataLite/;
 
 export async function scrapeAlerts(context) {
   const page = await context.newPage();
+  const payloads = [];
+
+  page.on('response', async (resp) => {
+    if (!ALERTS_API_RE.test(resp.url())) return;
+    try {
+      const json = await resp.json();
+      if (json && json.data && Array.isArray(json.data.alerts)) payloads.push(json.data);
+    } catch (_) { /* ignore non-JSON */ }
+  });
+
   try {
     await page.goto(NETRADYNE.url, { waitUntil: 'networkidle', timeout: 30000 });
-    await page.waitForTimeout(3000);
+    // Wait for the app to fire at least one alertsDataLite request.
+    await page.waitForResponse((r) => ALERTS_API_RE.test(r.url()), { timeout: 25000 }).catch(() => {});
+    await page.waitForTimeout(2500);
 
-    // ---- Aggressive overlay/modal removal ----
-    // NOTE: Netradyne now shows a "Smart View" and a "new-joiner-mandate" welcome
-    // modal that intercepts clicks; remove those plus the usual tour overlays.
-    await page.evaluate(() => {
-      const removals = [
-        '.modal-backdrop', '.modal', '.cdk-overlay-container',
-        '.new-joiner-mandate-modal', '[uib-modal-window]',
-        '[class*="overlay"]', '[class*="popup"]', '.tour-overlay',
-        '.onboarding-overlay', '.ui-widget-overlay',
-      ];
-      removals.forEach(sel => {
-        document.querySelectorAll(sel).forEach(el => el.remove());
-      });
-      // Remove any leftover fixed/dialog backdrops.
-      document.querySelectorAll('[role="dialog"]').forEach(el => el.remove());
-    });
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(500);
-
-    // ---- Select "Last 12 Hours" ----
-    try {
-      // Wait for the duration toggle to be clickable
-      await page.waitForSelector('[uib-dropdown-toggle]', { timeout: 5000 });
-      await page.click('[uib-dropdown-toggle]');
-      await page.waitForTimeout(800);
-      // Wait for the dropdown item to appear and click it
-      await page.waitForSelector('#duration-filter-last-12-hours', { state: 'visible', timeout: 5000 });
-      await page.click('#duration-filter-last-12-hours');
-      await page.waitForTimeout(2000);
-      log.info('Time range set to Last 12 Hours');
-    } catch (e) {
-      log.warn('Time range selection failed, using current view');
+    // Merge all captured payloads, dedupe by alert_id, resolve vehicle numbers.
+    const byId = new Map();
+    const vehicleIdMap = {};
+    for (const data of payloads) {
+      Object.assign(vehicleIdMap, data.vehicleIdMap || {});
+      for (const a of data.alerts || []) byId.set(a.alert_id, a);
     }
 
-    // ---- Wait for alert rows (legacy Expanded-View format) ----
-    // The redesigned "Smart View" does not use this row format; if no rows appear
-    // (either no alerts, or the new UI), return [] instead of throwing so the
-    // poller never crashes. TODO: implement Smart-View extraction.
-    const hasRows = await page.waitForFunction(
-      () => document.querySelectorAll('ul.alerts-div > li.alerts-page-li').length > 0,
-      { timeout: 20000 }
-    ).then(() => true).catch(() => false);
-    if (!hasRows) {
-      log.warn('No legacy alert rows found (redesigned UI or no alerts) — returning 0 alerts');
-      return [];
-    }
-
-    // ---- Extract alerts using innerText parsing ----
-    const alerts = await page.evaluate(() => {
-      const rows = document.querySelectorAll('ul.alerts-div > li.alerts-page-li');
-      return Array.from(rows).map(row => {
-        const text = (sel) => row.querySelector(sel)?.textContent?.trim() || '';
-        const alertId = row.getAttribute('prop-alert-id') || '';
-
-        // ---- TIME: extract from the entire row text ----
-        const fullText = row.innerText || '';
-        // Find the pattern: "HH:MM:SS AM/PM TZ\nMon DD YYYY" or similar
-        const timePattern = /(\d{1,2}:\d{2}:\d{2}\s*[AP]M)\s*([A-Z]{3,4})\s*\n?\s*([A-Z][a-z]{2}\s*\d{1,2}\s*\d{4})/i;
-        const timeMatch = fullText.match(timePattern);
-        let timeStr = '';
-        let dateStr = '';
-        if (timeMatch) {
-          timeStr = timeMatch[1] + ' ' + timeMatch[2];   // "03:02:56 AM PDT"
-          dateStr = timeMatch[3];                         // "Jun 23 2026"
-        } else {
-          // fallback: try separate patterns
-          const timeOnly = fullText.match(/(\d{1,2}:\d{2}:\d{2}\s*[AP]M)/);
-          const dateOnly = fullText.match(/([A-Z][a-z]{2}\s*\d{1,2}\s*\d{4})/);
-          if (timeOnly) timeStr = timeOnly[0];
-          if (dateOnly) dateStr = dateOnly[0];
-        }
-
-        // Other fields
-        const driver = text('.notification-box-driver-name');
-        const vehicleEl = row.querySelector('.notification-box-vehicle-num');
-        const vehicle = vehicleEl?.querySelector('div')?.textContent?.trim() || '';
-        const alertType = text('.notification-details-alert-type');
-        const subType = text('.notification-subtype');
-        const durationText = Array.from(row.querySelectorAll('*')).find(el =>
-          el.textContent.includes('Alert Duration :')
-        )?.textContent || '';
-        const severityIcon = row.querySelector('.notification-box-alert-icon i')?.className || '';
-
-        return {
-          externalAlertId: alertId,
-          driverName: driver,
-          driverId: '',
-          vehicleNumber: vehicle,
-          eventType: alertType,
-          eventCategory: subType || alertType,
-          timeStr,
-          dateStr,
-          durationText,
-          severityIcon,
-          rawData: { innerText: fullText },
-        };
-      });
-    });
-
-    // ---- Debug first alert's time strings ----
-    if (alerts.length > 0) {
-      console.log('🔍 DEBUG first alert time strings:', {
-        timeStr: alerts[0].timeStr,
-        dateStr: alerts[0].dateStr,
-      });
-    }
-
-    // ---- Map to final objects with parsed dates ----
-    const finalAlerts = alerts.map(raw => {
-      const combined = raw.timeStr && raw.dateStr
-        ? `${raw.dateStr} ${raw.timeStr.replace(/\s*[A-Z]{3,4}$/, '')}`
-        : raw.timeStr || raw.dateStr || '';
-      const occurredAt = combined ? robustParseDate(combined) : '';
-
-      let durationSeconds = 0;
-      const durMatch = raw.durationText?.match(/(\d+)m\s*(\d+)s/);
-      if (durMatch) durationSeconds = parseInt(durMatch[1]) * 60 + parseInt(durMatch[2]);
-
-      let severity = '';
-      if (raw.severityIcon.includes('severe')) severity = 'Severe';
-      else if (raw.severityIcon.includes('moderate')) severity = 'Moderate';
-      else if (raw.severityIcon.includes('positive')) severity = 'Positive';
-
+    const alerts = [...byId.values()].map((a) => {
+      const veh = vehicleIdMap[a.vehicle_id] || {};
       return {
-        externalAlertId: raw.externalAlertId,
-        driverName: raw.driverName,
-        driverId: '',
-        vehicleNumber: raw.vehicleNumber,
-        eventType: raw.eventType,
-        eventCategory: raw.eventCategory,
-        occurredAt,
-        durationSeconds,
+        externalAlertId: String(a.alert_id),
+        driverName: a.driver_name || '',
+        driverId: a.driver_id != null ? String(a.driver_id) : '',
+        vehicleNumber: veh.nickname || veh.registration_number || a.vehicle_number || '',
+        eventType: a.event_description || a.event_code || 'Alert',
+        eventCategory: a.event_description || '',
+        occurredAt: a.time_stamp ? new Date(a.time_stamp).toISOString() : '',
+        durationSeconds: a.alert_duration || 0,
         status: 'New',
-        severity,
-        rawData: raw.rawData,
+        severity: a.alert_severity != null ? String(a.alert_severity) : '',
+        rawData: a,
       };
     });
 
-    log.info(`Scraped ${finalAlerts.length} alerts`);
-    return finalAlerts;
+    log.info(`Collected ${alerts.length} alerts via API`);
+    return alerts;
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
   }
 }
