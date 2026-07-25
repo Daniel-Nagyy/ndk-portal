@@ -957,6 +957,26 @@ function renderNetradyneDashboard(user) {
       return;
     }
 
+    // Preserve ALL form field values + focus/cursor across the re-render. The 10s
+    // background polls call render(), which rebuilds the DOM; without this, whatever
+    // you're typing into a form (e.g. Create user) loses focus and gets wiped.
+    const activeEl = document.activeElement;
+    let focusInfo = null;
+    const formValues = [];
+    document.querySelectorAll('form[data-form]').forEach((form) => {
+      const key = form.dataset.form;
+      form.querySelectorAll('input, select, textarea').forEach((input) => {
+        if (!input.name) return;
+        formValues.push({ form: key, name: input.name, value: input.value });
+        if (input === activeEl) {
+          focusInfo = {
+            form: key, name: input.name,
+            start: input.selectionStart, end: input.selectionEnd,
+          };
+        }
+      });
+    });
+
     if (!isAllowedView(user, currentView)) {
       currentView = defaultView(user);
     }
@@ -973,6 +993,20 @@ function renderNetradyneDashboard(user) {
         </section>
       </main>
     `;
+
+    // Restore all form field values + focus/cursor after re-rendering.
+    formValues.forEach(({ form, name, value }) => {
+      const el = document.querySelector(`form[data-form="${form}"] [name="${name}"]`);
+      if (el && el.value !== value) el.value = value;
+    });
+    if (focusInfo) {
+      const el = document.querySelector(`form[data-form="${focusInfo.form}"] [name="${focusInfo.name}"]`);
+      if (el) {
+        el.focus();
+        try { if (el.setSelectionRange && focusInfo.start != null) el.setSelectionRange(focusInfo.start, focusInfo.end); } catch (_) {}
+      }
+    }
+
     queueOwnerHosNotifications(user);
     if (ownerHosPreserveSearchFocus && currentView === "owner-hos") {
       const searchInput = document.getElementById("hosSearchInput");
