@@ -11,7 +11,9 @@ dotenv.config();
 
 const WARNING_MINUTES = 60;
 const CRITICAL_MINUTES = 30;
-const RESEND_COOLDOWN_MS = 30 * 60 * 1000;
+// Don't re-send the same (driver, metric, threshold) within this window. Lower it
+// (e.g. HOS_RESEND_COOLDOWN_MS=0) to see every poll's alerts while testing.
+const RESEND_COOLDOWN_MS = Number(process.env.HOS_RESEND_COOLDOWN_MS ?? 30 * 60 * 1000);
 
 // key -> last-sent timestamp
 const sentAt = new Map();
