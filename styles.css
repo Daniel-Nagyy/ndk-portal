@@ -1290,6 +1290,7 @@ textarea.table-control {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  padding: 10px 16px;
   border-radius: var(--btn-radius);
   font-weight: 600;
   font-size: 0.865rem;
@@ -1371,7 +1372,7 @@ textarea.table-control {
 
 .btn-small {
   min-height: 32px;
-  padding: 0 12px;
+  padding: 6px 12px;
   font-size: 0.75rem;
   font-weight: 600;
   border-radius: 6px;
@@ -1992,7 +1993,6 @@ textarea.table-control {
   text-transform: uppercase;
   color: var(--muted-2);
   letter-spacing: 0.03em;
-}
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);

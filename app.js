@@ -514,8 +514,32 @@ pollNetradyneAlerts();
     return normalized;
   }
 
+  async function loadRecaps() {
+    try {
+      const res = await fetch("/api/recaps", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success && data.recaps) {
+        state.recaps = data.recaps;
+        state = normalizeState(state);
+      }
+    } catch (e) {
+      console.warn("Failed to load recaps:", e);
+    }
+  }
+
+  let syncRecapsTimer = null;
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (session) {
+      clearTimeout(syncRecapsTimer);
+      syncRecapsTimer = setTimeout(() => {
+        fetch("/api/recaps/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recaps: state.recaps })
+        }).catch(() => {});
+      }, 2000);
+    }
   }
 
   function saveSession() {
@@ -622,6 +646,7 @@ pollNetradyneAlerts();
         currentView = defaultView(appUser);
         render();
         await loadAccountsAndUsers();
+        await loadRecaps();
         render();
         if (appUser.role === "owner") fetchGeotabDriversReadiness();
       } else {

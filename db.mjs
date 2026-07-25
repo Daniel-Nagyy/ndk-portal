@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   sub_json TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS recaps (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  daily_date TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
 `);
 
 // --- lightweight migrations: add columns to existing DBs if missing ---
@@ -295,4 +304,40 @@ export function bootstrap() {
   }
 
   return { seeded: true };
+}
+
+// ---------- Recaps ----------
+export function getRecaps(accountId = null) {
+  if (accountId) {
+    const rows = db.prepare("SELECT * FROM recaps WHERE client_id = ?").all(accountId);
+    return rows.map(r => JSON.parse(r.payload));
+  }
+  const rows = db.prepare("SELECT * FROM recaps").all();
+  return rows.map(r => JSON.parse(r.payload));
+}
+
+export function syncRecaps(recapsArray) {
+  const stmt = db.prepare(`
+    INSERT INTO recaps (id, client_id, daily_date, payload, updated_at)
+    VALUES (@id, @client_id, @daily_date, @payload, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      client_id = excluded.client_id,
+      daily_date = excluded.daily_date,
+      payload = excluded.payload,
+      updated_at = datetime('now')
+  `);
+
+  const tx = db.transaction((recs) => {
+    for (const r of recs) {
+      if (!r.id || !r.clientId || !r.dailyDate) continue;
+      stmt.run({
+        id: r.id,
+        client_id: r.clientId,
+        daily_date: r.dailyDate,
+        payload: JSON.stringify(r)
+      });
+    }
+  });
+
+  tx(recapsArray);
 }

@@ -12,7 +12,8 @@ import {
   bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
-  getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint
+  getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
+  getRecaps, syncRecaps
 } from './db.mjs';
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
@@ -480,6 +481,55 @@ const requestHandler = (req, res) => {  // CORS Headers
         sendJson(200, { success: true, account: user.account_id, ...result });
       } catch (error) {
         sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
+  // ---------- Recaps ----------
+  if (url.pathname === '/api/recaps' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser) {
+      res.writeHead(401);
+      return res.end(JSON.stringify({ success: false, error: "Unauthorized" }));
+    }
+    
+    // Admins see all recaps. Owners/dispatchers see only their account's recaps (if tied to one).
+    const filterAccountId = (authUser.role === "superadmin" || authUser.role === "admin") ? null : authUser.account_id;
+    const recaps = getRecaps(filterAccountId);
+    
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, recaps }));
+    return;
+  }
+
+  if (url.pathname === '/api/recaps/sync' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) {
+          res.writeHead(401);
+          return res.end(JSON.stringify({ success: false, error: "Unauthorized" }));
+        }
+        
+        const body = await readJsonBody(req);
+        if (body && Array.isArray(body.recaps)) {
+          // If the user isn't an admin, enforce their account_id
+          const recsToSync = body.recaps.map(r => {
+            if (authUser.role !== "superadmin" && authUser.role !== "admin") {
+              r.clientId = authUser.account_id;
+            }
+            return r;
+          });
+          syncRecaps(recsToSync);
+        }
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        console.error("Recaps sync error:", e);
+        res.writeHead(500);
+        res.end(JSON.stringify({ success: false, error: e.message }));
       }
     })();
     return;
