@@ -3918,30 +3918,45 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
     }
   }
 
-  function createUser(data, form) {
+  async function createUser(data, form) {
     const email = data.email.trim().toLowerCase();
     if (state.users.some((user) => user.email.toLowerCase() === email)) {
       showToast("A user with that email already exists.");
       return;
     }
-    const user = {
-      id: `u-${Date.now()}`,
-      name: data.name.trim(),
-      email,
-      role: data.role,
-      clientId: data.clientId || null,
-      timezone: "America/New_York",
-      status: "active",
-      password: data.password,
-      temporaryPassword: true,
-      lastLogin: "",
-    };
-    state.users.push(user);
-    addAudit(`${getCurrentUser().name} registered ${user.name}.`);
-    saveState();
-    form.reset();
-    render();
-    showToast(`Created ${user.name} with temporary credentials.`);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          email: email,
+          name: data.name.trim(),
+          role: data.role,
+          password: data.password,
+          accountId: data.accountId || getCurrentUser().accountId || null
+        }),
+      });
+      const result = await res.json();
+      if (!result.success) {
+        showToast(result.error || "Could not create user.");
+        return;
+      }
+      // Refresh users from server to get the updated list
+      const accountId = data.accountId || getCurrentUser().accountId || null;
+      const usersRes = await fetch(`/api/admin/users?accountId=${accountId || ''}`, { credentials: "same-origin" });
+      const usersResult = await usersRes.json();
+      if (usersResult.success) {
+        state.users = usersResult.users;
+        saveState();
+      }
+      form.reset();
+      render();
+      showToast(`Created ${data.name.trim()} with temporary credentials.`);
+    } catch (error) {
+      console.warn("Create user failed:", error);
+      showToast("Could not reach the server. Try again.");
+    }
   }
 
   function createShift(data, form) {
