@@ -329,8 +329,12 @@ const requestHandler = (req, res) => {  // CORS Headers
       try {
         const authUser = getAuthUser(req);
         if (!authUser) return sendJson(401, { success: false, error: 'Log in first' });
-        const accountId = authUser.account_id || url.searchParams.get('accountId');
-        if (!accountId) return sendJson(400, { success: false, error: 'This user has no account' });
+        // Superadmin may target any account via ?accountId=; others only their own.
+        const requested = url.searchParams.get('accountId');
+        const accountId = (requested && (authUser.role === 'superadmin' || authUser.account_id === requested))
+          ? requested
+          : authUser.account_id;
+        if (!accountId) return sendJson(400, { success: false, error: 'No account. Pass ?accountId=<id> (superadmin) or log in as an account user.' });
         const type = (url.searchParams.get('type') || 'hos').toLowerCase();
         const critical = url.searchParams.get('critical') !== '0';
         const nowEt = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
