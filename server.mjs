@@ -11,11 +11,13 @@ import { pushConfigured, getVapidPublicKey, addSubscription, removeSubscription,
 import {
   bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount,
-  listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials
+  listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
+  getSubscriptionsForAccount
 } from './db.mjs';
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
 import { startHosEngine } from './hos-engine.mjs';
+import { notifyAccount } from './notify.mjs';
 dotenv.config();
 
 // Seed superadmin + migrate env account into the DB on first run.
@@ -319,6 +321,48 @@ const requestHandler = (req, res) => {  // CORS Headers
 
 
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+  // Test push + Telegram for the logged-in user's OWN account (real routing path).
+  // /api/test-alert?type=hos|netradyne&critical=1
+  if (url.pathname === '/api/test-alert') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Log in first' });
+        const accountId = authUser.account_id || url.searchParams.get('accountId');
+        if (!accountId) return sendJson(400, { success: false, error: 'This user has no account' });
+        const type = (url.searchParams.get('type') || 'hos').toLowerCase();
+        const critical = url.searchParams.get('critical') !== '0';
+        const nowEt = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+
+        let payload;
+        if (type === 'netradyne') {
+          payload = {
+            title: `${critical ? '🚨 Severe' : '⚠️ Moderate'} Driver Drowsiness`,
+            body: `Test Driver — Vehicle 000000 · ${nowEt}`,
+            tag: 'test-netradyne',
+            critical,
+            telegramText: `${critical ? '🚨' : '⚠️'} Netradyne TEST (${critical ? 'Severe' : 'Moderate'})\nEvent: Driver Drowsiness\nDriver: Test Driver\nVehicle: 000000\nTime: ${nowEt}`,
+          };
+        } else {
+          payload = {
+            title: `${critical ? '🚨 HOS CRITICAL' : '⏰ HOS Warning'} — Test Driver`,
+            body: critical ? 'Break runs out in 8 min (0:08 left). Act now.' : 'Break: 0:45 left (~45 min).',
+            tag: 'test-hos',
+            critical,
+            telegramText: `${critical ? '🚨 HOS CRITICAL' : '⏰ HOS Warning'} TEST\nDriver: Test Driver\nBreak: ${critical ? '8' : '45'} min left`,
+          };
+        }
+        const subs = getSubscriptionsForAccount(accountId).length;
+        const result = await notifyAccount(accountId, payload);
+        sendJson(200, { success: true, account: accountId, deviceSubscriptions: subs, ...result });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
   if (url.pathname === '/api/notify' && req.method === 'POST') {
     (async () => {
       try {

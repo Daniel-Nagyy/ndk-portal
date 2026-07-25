@@ -73,21 +73,24 @@ async function pollAccount(account) {
       sentAt.set(key, now);
 
       const isCritical = risk.tier === "critical";
-      const emoji = isCritical ? "⚠️" : "⏰";
-      const title = `${isCritical ? "HOS CRITICAL" : "HOS Warning"} — ${driver.driverName}`;
-      const body = `${risk.label}: ${risk.display} left (~${risk.minutes} min) · ${driver.currentStatus}`;
+      const title = isCritical
+        ? `🚨 HOS CRITICAL — ${driver.driverName}`
+        : `⏰ HOS Warning — ${driver.driverName}`;
+      const body = isCritical
+        ? `${risk.label} runs out in ${risk.minutes} min (${risk.display} left). Act now.`
+        : `${risk.label}: ${risk.display} left (~${risk.minutes} min).`;
       const telegramText = [
-        `${emoji} ${isCritical ? "HOS CRITICAL" : "HOS WARNING"}`,
-        `Account: ${account.name}`,
+        `${isCritical ? "🚨 HOS CRITICAL" : "⏰ HOS Warning"}`,
         `Driver: ${driver.driverName}`,
-        `${risk.label}: ${risk.display} remaining (~${risk.minutes} min)`,
-        `Status: ${driver.currentStatus}`,
+        `${risk.label}: ${risk.display} left (~${risk.minutes} min)`,
+        `Duty status: ${driver.currentStatus}`,
+        `Account: ${account.name}`,
       ].join("\n");
 
       await notifyAccount(account.id, {
         title, body,
         tag: `hos-${driver.id}-${risk.metric}`,
-        requireInteraction: isCritical,
+        critical: isCritical,
         url: "/index.html",
         telegramText,
       });

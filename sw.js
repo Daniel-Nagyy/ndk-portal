@@ -1,4 +1,4 @@
-const CACHE_NAME = "ndk-owner-app-v8";
+const CACHE_NAME = "ndk-owner-app-v9";
 
 // Only real, existing files. (v6 referenced /manifest.json and /icons/* which 404'd,
 // causing cache.addAll to reject and the whole service worker to fail installing —
@@ -50,13 +50,17 @@ self.addEventListener("push", (event) => {
   } catch (_) {
     data = { title: "NDK Alert", body: event.data ? event.data.text() : "" };
   }
+  const critical = Boolean(data.critical || data.requireInteraction);
   const title = data.title || "NDK Dispatch";
   const options = {
     body: data.body || "",
     icon: data.icon || "/ndk.png",
     badge: data.badge || "/ndk.png",
     tag: data.tag || undefined,
-    requireInteraction: Boolean(data.requireInteraction),
+    renotify: Boolean(data.tag),                       // re-alert even with same tag
+    requireInteraction: critical,                       // critical stays until dismissed
+    vibrate: critical ? [300, 120, 300, 120, 300] : [200], // stronger buzz for critical
+    silent: false,
     data: { url: data.url || "/index.html" },
   };
   event.waitUntil(self.registration.showNotification(title, options));

@@ -60,9 +60,9 @@ export async function sendTelegramToAccount(accountId, text) {
 }
 
 // Send an alert to an account through both channels.
-export async function notifyAccount(accountId, { title, body, tag, requireInteraction = false, url = "/index.html", telegramText }) {
+export async function notifyAccount(accountId, { title, body, tag, requireInteraction = false, critical = false, url = "/index.html", telegramText }) {
   const [push, tg] = await Promise.allSettled([
-    sendPushToAccount(accountId, { title, body, tag, requireInteraction, url }),
+    sendPushToAccount(accountId, { title, body, tag, requireInteraction: requireInteraction || critical, critical, url }),
     sendTelegramToAccount(accountId, telegramText || `${title}\n${body}`),
   ]);
   return {
