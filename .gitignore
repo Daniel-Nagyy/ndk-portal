@@ -1,0 +1,34 @@
+# --- Secrets & credentials (NEVER commit) ---
+.env
+.env.*
+!.env.example
+push-subscriptions.json
+
+# TLS / private keys
+*.pem
+cert.pem
+key.pem
+
+# Saved browser login sessions (contains Netradyne auth cookies)
+netradyne-browser-data/
+netradyne/browser-data/
+
+# --- Dependencies ---
+node_modules/
+
+# --- Logs & scratch output ---
+*.log
+server-out.log
+server-err.log
+scratch-server.log
+scratch-tunnel.log
+
+# --- Generated / captured artifacts ---
+shots/
+shots-mobile/
+netradyne-debug.png
+*.pptx
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db

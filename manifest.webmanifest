@@ -1,0 +1,16 @@
+{
+  "name": "NDK Dispatch",
+  "short_name": "NDK",
+  "start_url": "/?v=4",
+  "display": "standalone",
+  "background_color": "#080b0f",
+  "theme_color": "#080b0f",
+  "icons": [
+    {
+      "src": "ndk.png?v=4",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
