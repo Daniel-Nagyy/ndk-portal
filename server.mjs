@@ -8,7 +8,16 @@ import { startPolling } from './netradyne/poller.js';
 import { getAlerts } from './netradyne/store.js';
 import {addAlerts, updateAlertStatus } from './netradyne/store.js';
 import { pushConfigured, getVapidPublicKey, addSubscription, removeSubscription, sendPushToAll, subscriptionCount } from './push.mjs';
+import {
+  bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
+  publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount,
+  listUsers, createUser, saveSubscription, changePassword, getUserById
+} from './db.mjs';
+import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 dotenv.config();
+
+// Seed superadmin + migrate env account into the DB on first run.
+try { bootstrap(); } catch (e) { console.error('DB bootstrap failed:', e.message || e); }
 
 const root = process.cwd();
 const port = Number(process.env.PORT || 4173);
@@ -611,6 +620,124 @@ const requestHandler = (req, res) => {  // CORS Headers
     return;
   }
 
+  const sendJson = (status, obj, extraHeaders = {}) => {
+    res.writeHead(status, { 'Content-Type': 'application/json', ...extraHeaders });
+    res.end(JSON.stringify(obj));
+  };
+
+  // ---------- Auth ----------
+  if (req.url === '/api/login' && req.method === 'POST') {
+    (async () => {
+      try {
+        const body = await readJsonBody(req);
+        const user = getUserByEmail(body.email || '');
+        if (!user || !verifyPassword(user, body.password || '')) {
+          return sendJson(401, { success: false, error: 'Invalid email or password' });
+        }
+        const { token, expires } = createSession(user.id);
+        const account = user.account_id ? dbPublicAccount(getAccount(user.account_id)) : null;
+        sendJson(200, { success: true, user: publicUser(user), account }, { 'Set-Cookie': sessionCookie(token, expires) });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
+  if (req.url === '/api/logout' && req.method === 'POST') {
+    deleteSession(getSessionToken(req));
+    sendJson(200, { success: true }, { 'Set-Cookie': clearSessionCookie() });
+    return;
+  }
+
+  if (req.url === '/api/me' && req.method === 'GET') {
+    const user = getAuthUser(req);
+    if (!user) return sendJson(200, { success: true, user: null });
+    const account = user.account_id ? dbPublicAccount(getAccount(user.account_id)) : null;
+    sendJson(200, { success: true, user: publicUser(user), account });
+    return;
+  }
+
+  if (req.url === '/api/change-password' && req.method === 'POST') {
+    (async () => {
+      try {
+        const user = getAuthUser(req);
+        if (!user) return sendJson(401, { success: false, error: 'Not authenticated' });
+        const body = await readJsonBody(req);
+        if (!verifyPassword(user, body.currentPassword || '')) {
+          return sendJson(400, { success: false, error: 'Current password is incorrect' });
+        }
+        if (!body.newPassword || String(body.newPassword).length < 6) {
+          return sendJson(400, { success: false, error: 'New password must be at least 6 characters' });
+        }
+        changePassword(user.id, body.newPassword);
+        sendJson(200, { success: true });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
+  // ---------- Admin: accounts & users ----------
+  if (req.url === '/api/admin/accounts' && req.method === 'GET') {
+    const user = getAuthUser(req);
+    if (!user) return sendJson(401, { success: false, error: 'Not authenticated' });
+    const accts = user.role === 'superadmin'
+      ? listAccounts()
+      : [getAccount(user.account_id)].filter(Boolean);
+    sendJson(200, { success: true, accounts: accts.map(dbPublicAccount) });
+    return;
+  }
+
+  if (req.url === '/api/admin/accounts' && req.method === 'POST') {
+    (async () => {
+      try {
+        const user = getAuthUser(req);
+        if (!user || user.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+        const body = await readJsonBody(req);
+        if (!body.name) return sendJson(400, { success: false, error: 'name required' });
+        const acct = createAccount(body);
+        sendJson(200, { success: true, account: dbPublicAccount(acct) });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
+  if (req.url && req.url.startsWith('/api/admin/users')) {
+    const u = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (req.method === 'GET') {
+      const user = getAuthUser(req);
+      if (!user) return sendJson(401, { success: false, error: 'Not authenticated' });
+      const accountId = u.searchParams.get('accountId') || user.account_id;
+      if (!canAccessAccount(user, accountId)) return sendJson(403, { success: false, error: 'Forbidden' });
+      sendJson(200, { success: true, users: listUsers(accountId).map(publicUser) });
+      return;
+    }
+    if (req.method === 'POST') {
+      (async () => {
+        try {
+          const user = getAuthUser(req);
+          if (!user) return sendJson(401, { success: false, error: 'Not authenticated' });
+          const body = await readJsonBody(req);
+          const accountId = body.accountId || user.account_id;
+          // superadmin: any account; owner/manager: only their own account.
+          const allowed = user.role === 'superadmin' || (['owner', 'manager'].includes(user.role) && user.account_id === accountId);
+          if (!allowed) return sendJson(403, { success: false, error: 'Forbidden' });
+          if (body.role === 'superadmin' && user.role !== 'superadmin') return sendJson(403, { success: false, error: 'Cannot create superadmin' });
+          if (!body.email || !body.password || !body.role) return sendJson(400, { success: false, error: 'email, password, role required' });
+          const created = createUser({ ...body, accountId });
+          sendJson(200, { success: true, user: publicUser(created) });
+        } catch (error) {
+          sendJson(400, { success: false, error: simplifyError(error) });
+        }
+      })();
+      return;
+    }
+  }
+
   // API Endpoints
   if (req.url === '/api/hos') {
     if (req.method === 'GET') {
@@ -675,6 +802,12 @@ const requestHandler = (req, res) => {  // CORS Headers
         const body = await readJsonBody(req);
         const sub = body.subscription || body;
         const result = addSubscription(sub);
+        // Also associate with the logged-in user/account for per-account routing (Phase 2).
+        const user = getAuthUser(req);
+        if (user && sub && sub.endpoint) {
+          try { saveSubscription(user.id, user.account_id, sub); }
+          catch (e) { console.warn('saveSubscription failed:', e.message || e); }
+        }
         res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: result.ok, ...result }));
       } catch (error) {

@@ -33,7 +33,6 @@
         clientId: null,
         timezone: "Africa/Cairo",
         status: "active",
-        password: "admin123",
         temporaryPassword: false,
         lastLogin: "2026-06-15 16:45",
       },
@@ -45,7 +44,6 @@
         clientId: "makowaves-logistics",
         timezone: "America/New_York",
         status: "active",
-        password: "dispatch123",
         temporaryPassword: true,
         lastLogin: "2026-06-15 07:10",
       },
@@ -57,7 +55,6 @@
         clientId: "makowaves-logistics",
         timezone: "America/Chicago",
         status: "active",
-        password: "dispatch123",
         temporaryPassword: false,
         lastLogin: "2026-06-15 02:55",
       },
@@ -69,7 +66,6 @@
         clientId: "makowaves-logistics",
         timezone: "America/New_York",
         status: "active",
-        password: "owner123",
         temporaryPassword: true,
         lastLogin: "2026-06-14 19:22",
       },
@@ -220,6 +216,10 @@ let thresholdNotified = loadNotificationMemory(THRESHOLD_MEMORY_KEY);
   });
 
   render();
+
+  // Auth is server-backed: ignore any stale local session and ask the server who we are.
+  session = null;
+  restoreSession();
 
   app.addEventListener("submit", handleSubmit);
   app.addEventListener("click", handleClick);
@@ -663,9 +663,57 @@ pollNetradyneAlerts();
   function roleLabel(role) {
     return {
       admin: "Admin",
+      superadmin: "Admin",
       owner: "Owner",
+      manager: "Manager",
       dispatcher: "Dispatcher",
     }[role] || role;
+  }
+
+  // Map real backend roles onto the app's existing view/permission roles.
+  function mapServerRole(role) {
+    if (role === "superadmin") return "admin";
+    if (role === "manager") return "owner"; // managers get the owner oversight + alerts view
+    return role; // owner, dispatcher
+  }
+
+  // Inject a server-authenticated user into state.users so the rest of the app
+  // (which reads state.users / role / clientId) keeps working, and return it.
+  function applyServerUser(serverUser, account) {
+    const appUser = {
+      id: serverUser.id,
+      name: serverUser.name || serverUser.email,
+      email: serverUser.email,
+      role: mapServerRole(serverUser.role),
+      serverRole: serverUser.role,
+      clientId: serverUser.accountId || null,
+      accountName: account ? account.name : null,
+      status: "active",
+    };
+    state.users = (state.users || []).filter((u) => u.id !== appUser.id && u.email !== appUser.email);
+    state.users.push(appUser);
+    return appUser;
+  }
+
+  // Restore the session from the server's HttpOnly cookie on page load.
+  async function restoreSession() {
+    try {
+      const res = await fetch("/api/me", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success && data.user) {
+        const appUser = applyServerUser(data.user, data.account);
+        session = { userId: appUser.id };
+        currentView = defaultView(appUser);
+        render();
+        if (appUser.role === "owner") fetchGeotabDriversReadiness();
+      } else {
+        session = null;
+        currentView = "login";
+        render();
+      }
+    } catch (error) {
+      console.warn("Session restore failed:", error);
+    }
   }
 
   function clientName(clientId) {
@@ -950,28 +998,20 @@ function renderNetradyneDashboard(user) {
         <div class="login-panel-wrap">
           <form class="login-panel" data-form="login">
             <h2>Sign in</h2>
-            <p class="hint">Managers create accounts first. New users can change their temporary password from settings.</p>
+            <p class="hint">Enter the email and password for your NDK Dispatch account.</p>
 
             <div class="field">
               <label for="email">Email</label>
-              <input id="email" name="email" type="email" autocomplete="username" required value="manager@ndk-dispatch.com" />
+              <input id="email" name="email" type="email" autocomplete="username" required />
             </div>
             <div class="field">
               <label for="password">Password</label>
-              <input id="password" name="password" type="password" autocomplete="current-password" required value="admin123" />
+              <input id="password" name="password" type="password" autocomplete="current-password" required />
             </div>
 
             <div class="login-actions">
               <button class="btn btn-primary" type="submit">Sign in</button>
-              <div class="demo-accounts" aria-label="Demo account shortcuts">
-                <button class="quick-login" type="button" data-demo-login="admin" data-role="admin">Admin</button>
-                <button class="quick-login" type="button" data-demo-login="dispatcher" data-role="dispatcher">Dispatcher</button>
-                <button class="quick-login" type="button" data-demo-login="owner" data-role="owner">Owner</button>
-              </div>
-              <button class="btn btn-secondary" type="button" data-action="reset-demo">Reset demo passwords</button>
             </div>
-
-            <div class="login-note">Prototype credentials are stored locally in this browser only. Resetting demo passwords clears local demo changes and imports.</div>
           </form>
         </div>
       </section>
@@ -3565,23 +3605,6 @@ if (sortBtn && currentView === 'netradyne-dashboard') {
       return;
     }
 
-    const demo = event.target.closest("[data-demo-login]");
-    if (demo) {
-      const role = demo.dataset.demoLogin;
-      const map = {
-        admin: ["manager@ndk-dispatch.com", "admin123"],
-        dispatcher: ["dispatcher@ndk-dispatch.com", "dispatch123"],
-        owner: ["owner@makowaveslogistics.com", "owner123"],
-      };
-      const [email, password] = map[role];
-      const emailInput = app.querySelector("#email");
-      const passwordInput = app.querySelector("#password");
-      if (emailInput && passwordInput) {
-        emailInput.value = email;
-        passwordInput.value = password;
-      }
-      return;
-    }
 
     const filter = event.target.closest("[data-filter]");
     if (filter) {
@@ -3629,13 +3652,17 @@ if (recapToggle) {
     if (!action) return;
     const user = getCurrentUser();
     switch (action.dataset.action) {
-      case "logout":
+      case "logout": {
+        fetch("/api/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+        const loggedOutId = session?.userId;
         session = null;
         saveSession();
+        state.users = (state.users || []).filter((u) => u.id !== loggedOutId);
         currentView = "login";
         render();
         showToast("Signed out.");
         break;
+      }
         case "hos-open-filters":
   hosFiltersOpen = true;
   render();
@@ -3819,46 +3846,54 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
     handleInput.searchTimer = window.setTimeout(render, 120);
   }
 
-  function login(email, password) {
-    const normalized = String(email || "").trim().toLowerCase();
-    const user = state.users.find((item) => item.email.toLowerCase() === normalized);
-    if (!user || user.password !== password) {
-      showToast("Email or password is incorrect. Use Reset demo passwords if local demo data changed.");
-      return;
+  async function login(email, password) {
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        showToast(data.error || "Email or password is incorrect.");
+        return;
+      }
+      const appUser = applyServerUser(data.user, data.account);
+      session = { userId: appUser.id };
+      currentView = defaultView(appUser);
+      render();
+      if (appUser.role === "owner") fetchGeotabDriversReadiness();
+      showToast(`Welcome, ${appUser.name}.`);
+    } catch (error) {
+      console.warn("Login failed:", error);
+      showToast("Could not reach the server. Try again.");
     }
-    if (user.status !== "active") {
-      showToast("This account is disabled.");
-      return;
-    }
-    user.lastLogin = "2026-06-15 17:00";
-    session = { userId: user.id };
-    currentView = defaultView(user);
-    saveState();
-    saveSession();
-    render();
-    if (user.role === "owner") {
-      fetchGeotabDriversReadiness();
-    }
-    showToast(`Welcome, ${user.name}.`);
   }
 
-  function updatePassword(data) {
-    const user = getCurrentUser();
-    if (!user) return;
-    if (data.currentPassword !== user.password) {
-      showToast("Current password is incorrect.");
-      return;
-    }
+  async function updatePassword(data) {
     if (data.newPassword !== data.confirmPassword) {
       showToast("New passwords do not match.");
       return;
     }
-    user.password = data.newPassword;
-    user.temporaryPassword = false;
-    addAudit(`${user.name} changed password.`);
-    saveState();
-    render();
-    showToast("Password updated.");
+    try {
+      const res = await fetch("/api/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ currentPassword: data.currentPassword, newPassword: data.newPassword }),
+      });
+      const result = await res.json();
+      if (!result.success) {
+        showToast(result.error || "Could not update password.");
+        return;
+      }
+      render();
+      showToast("Password updated.");
+    } catch (error) {
+      console.warn("Password update failed:", error);
+      showToast("Could not reach the server. Try again.");
+    }
   }
 
   function createUser(data, form) {

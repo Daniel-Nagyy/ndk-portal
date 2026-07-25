@@ -8,6 +8,8 @@
     "generate-cert": "node generate-cert.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.1",
     "dotenv": "^16.4.5",
     "playwright": "^1.61.0",
     "pptxgenjs": "^4.0.1",
