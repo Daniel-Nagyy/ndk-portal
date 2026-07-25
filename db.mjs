@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 `);
 
+// --- lightweight migrations: add columns to existing DBs if missing ---
+function addColumnIfMissing(table, column, def) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+}
+addColumnIfMissing("accounts", "telegram_bot_token_enc", "TEXT");
+addColumnIfMissing("accounts", "telegram_chat_id", "TEXT");
+
 const genId = (prefix) => `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 const slugify = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
@@ -62,9 +70,11 @@ export function createAccount(input) {
   const id = input.id ? slugify(input.id) : slugify(input.name) || genId("acct");
   db.prepare(`INSERT INTO accounts
     (id, name, geotab_server, geotab_database, geotab_username, geotab_password_enc,
-     netradyne_email, netradyne_password_enc, netradyne_poll_ms)
+     netradyne_email, netradyne_password_enc, netradyne_poll_ms,
+     telegram_bot_token_enc, telegram_chat_id)
     VALUES (@id,@name,@geotab_server,@geotab_database,@geotab_username,@geotab_password_enc,
-     @netradyne_email,@netradyne_password_enc,@netradyne_poll_ms)`).run({
+     @netradyne_email,@netradyne_password_enc,@netradyne_poll_ms,
+     @telegram_bot_token_enc,@telegram_chat_id)`).run({
     id,
     name: input.name,
     geotab_server: input.geotabServer || "my.geotab.com",
@@ -74,6 +84,8 @@ export function createAccount(input) {
     netradyne_email: input.netradyneEmail || null,
     netradyne_password_enc: encrypt(input.netradynePassword || ""),
     netradyne_poll_ms: Number(input.netradynePollMs) || 300000,
+    telegram_bot_token_enc: input.telegramBotToken ? encrypt(input.telegramBotToken) : null,
+    telegram_chat_id: input.telegramChatId || null,
   });
   return getAccount(id);
 }
@@ -95,12 +107,15 @@ export function updateAccount(id, input) {
     netradyne_email: input.netradyneEmail ?? a.netradyne_email,
     netradyne_password_enc: input.netradynePassword != null ? encrypt(input.netradynePassword) : a.netradyne_password_enc,
     netradyne_poll_ms: input.netradynePollMs != null ? Number(input.netradynePollMs) : a.netradyne_poll_ms,
+    telegram_bot_token_enc: input.telegramBotToken != null ? (input.telegramBotToken ? encrypt(input.telegramBotToken) : null) : a.telegram_bot_token_enc,
+    telegram_chat_id: input.telegramChatId ?? a.telegram_chat_id,
     id,
   };
   db.prepare(`UPDATE accounts SET name=@name, geotab_server=@geotab_server, geotab_database=@geotab_database,
     geotab_username=@geotab_username, geotab_password_enc=@geotab_password_enc,
     netradyne_email=@netradyne_email, netradyne_password_enc=@netradyne_password_enc,
-    netradyne_poll_ms=@netradyne_poll_ms WHERE id=@id`).run(next);
+    netradyne_poll_ms=@netradyne_poll_ms, telegram_bot_token_enc=@telegram_bot_token_enc,
+    telegram_chat_id=@telegram_chat_id WHERE id=@id`).run(next);
   return getAccount(id);
 }
 
@@ -126,6 +141,10 @@ export function getAccountCredentials(id) {
       password: decrypt(a.netradyne_password_enc),
       pollMs: a.netradyne_poll_ms,
     },
+    telegram: {
+      botToken: a.telegram_bot_token_enc ? decrypt(a.telegram_bot_token_enc) : "",
+      chatId: a.telegram_chat_id || "",
+    },
   };
 }
 
@@ -138,6 +157,7 @@ export function publicAccount(a) {
     geotabDatabase: a.geotab_database,
     hasGeotab: Boolean(a.geotab_username && a.geotab_password_enc),
     hasNetradyne: Boolean(a.netradyne_email && a.netradyne_password_enc),
+    hasTelegram: Boolean(a.telegram_chat_id),
   };
 }
 
