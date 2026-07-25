@@ -1,5 +1,5 @@
 (function () {
-  const STORAGE_KEY = "ndkPortalState.v1";
+  const STORAGE_KEY = "ndkPortalState.v2";
   const SESSION_KEY = "ndkPortalSession.v1";
   const HOS_NOTIFICATION_KEY = "ndkPortalHosNotifications.v1";
 
@@ -23,139 +23,17 @@
     return NAV_ICONS[name] || '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>';
   }
 
+  // No hardcoded data. Accounts and users come from the backend (DB); HOS comes
+  // from Geotab. These start empty and are populated from the server after login.
   const seedState = {
-    users: [
-      {
-        id: "u-admin",
-        name: "Daniel Nagy",
-        email: "manager@ndk-dispatch.com",
-        role: "admin",
-        clientId: null,
-        timezone: "Africa/Cairo",
-        status: "active",
-        temporaryPassword: false,
-        lastLogin: "2026-06-15 16:45",
-      },
-      {
-        id: "u-dispatcher",
-        name: "Nora Dispatch",
-        email: "dispatcher@ndk-dispatch.com",
-        role: "dispatcher",
-        clientId: "makowaves-logistics",
-        timezone: "America/New_York",
-        status: "active",
-        temporaryPassword: true,
-        lastLogin: "2026-06-15 07:10",
-      },
-      {
-        id: "u-dispatcher-2",
-        name: "Mark Control",
-        email: "mark@ndk-dispatch.com",
-        role: "dispatcher",
-        clientId: "makowaves-logistics",
-        timezone: "America/Chicago",
-        status: "active",
-        temporaryPassword: false,
-        lastLogin: "2026-06-15 02:55",
-      },
-      {
-        id: "u-owner",
-        name: "makowaves Logistics Owner",
-        email: "owner@makowaveslogistics.com",
-        role: "owner",
-        clientId: "makowaves-logistics",
-        timezone: "America/New_York",
-        status: "active",
-        temporaryPassword: true,
-        lastLogin: "2026-06-14 19:22",
-      },
-    ],
-    clients: [
-      {
-        id: "makowaves-logistics",
-        name: "makowaves Logistics LLC",
-        ownerUserId: "u-owner",
-        fleetSize: 32,
-        active: true,
-        accountManager: "Daniel Nagy",
-      },
-      {
-        id: "northline-carriers",
-        name: "Northline Carriers",
-        ownerUserId: null,
-        fleetSize: 18,
-        active: true,
-        accountManager: "Daniel Nagy",
-      },
-    ],
-    shifts: [
-      {
-        id: "s-early",
-        clientId: "makowaves-logistics",
-        assignedDispatcherId: "u-dispatcher",
-        date: "2026-06-15",
-        start: "03:00",
-        end: "11:00",
-        status: "In Progress",
-        desk: "makowaves Dispatch team",
-        handoff: "Five live blocks, one missing final arrival, and one fuel value below threshold.",
-      },
-      {
-        id: "s-mid",
-        clientId: "makowaves-logistics",
-        assignedDispatcherId: "u-dispatcher-2",
-        date: "2026-06-15",
-        start: "07:00",
-        end: "15:00",
-        status: "Scheduled",
-        desk: "makowaves Dispatch team",
-        handoff: "Watch HOS pre-check for Jawuan Anderson and confirm BOL upload for Darwen Santiago.",
-      },
-      {
-        id: "s-open",
-        clientId: "makowaves-logistics",
-        assignedDispatcherId: null,
-        date: "2026-06-15",
-        start: "15:00",
-        end: "23:00",
-        status: "Open",
-        desk: "makowaves Dispatch team",
-        handoff: "Evening coverage needs takeover. Review unresolved issues before 16:00.",
-      },
-    ],
-   recaps: [],
-    recapDays: [
-      {
-        id: "day-makowaves-logistics-2026-06-15",
-        clientId: "makowaves-logistics",
-        date: "2026-06-15",
-        source: "Seed data",
-        importedAt: "2026-06-15 17:00",
-        rowCount: 6,
-      },
-    ],
+    users: [],
+    clients: [],
+    shifts: [],
+    recaps: [],
+    recapDays: [],
     hosDrivers: [],
-    announcements: [
-      {
-        id: "a-1",
-        title: "makowaves Logistics coverage note",
-        body: "Confirm final arrival home yard for all morning blocks before handoff.",
-        audience: "all",
-        date: "2026-06-15",
-      },
-      {
-        id: "a-2",
-        title: "HOS reminder",
-        body: "Run shift pre-check before first yard check-in and log any risk in daily recap.",
-        audience: "dispatchers",
-        date: "2026-06-15",
-      },
-    ],
-    audit: [
-      "Daniel created makowaves Logistics owner credentials.",
-      "Nora Dispatch updated Tony Walker issue notes.",
-      "Mark Control accepted mid-shift coverage.",
-    ],
+    announcements: [],
+    audit: [],
   };
 
   let state = normalizeState(loadState());
@@ -695,6 +573,44 @@ pollNetradyneAlerts();
     return appUser;
   }
 
+  // Map a server user (publicUser shape) into the app's user shape.
+  function mapServerUserToApp(su) {
+    return {
+      id: su.id,
+      name: su.name || su.email,
+      email: su.email,
+      role: mapServerRole(su.role),
+      serverRole: su.role,
+      clientId: su.accountId || null,
+      status: "active",
+    };
+  }
+
+  // Load real accounts + users from the backend. Replaces hardcoded seed data so
+  // clients/users everywhere come from the database, not app.js.
+  async function loadAccountsAndUsers() {
+    try {
+      const [accRes, usrRes] = await Promise.all([
+        fetch("/api/admin/accounts", { credentials: "same-origin" }).then((r) => r.json()).catch(() => null),
+        fetch("/api/admin/users", { credentials: "same-origin" }).then((r) => r.json()).catch(() => null),
+      ]);
+      if (accRes && accRes.success) {
+        state.clients = accRes.accounts.map((a) => ({ id: a.id, name: a.name, active: true }));
+      }
+      if (usrRes && usrRes.success) {
+        const current = getCurrentUser();
+        state.users = usrRes.users.map(mapServerUserToApp);
+        // Keep the signed-in user present (with its accountName for the header).
+        const idx = state.users.findIndex((u) => u.id === current?.id);
+        if (current && idx === -1) state.users.push(current);
+        else if (current && idx >= 0) state.users[idx].accountName = current.accountName;
+      }
+      saveState();
+    } catch (error) {
+      console.warn("Failed to load accounts/users:", error);
+    }
+  }
+
   // Restore the session from the server's HttpOnly cookie on page load.
   async function restoreSession() {
     try {
@@ -704,6 +620,8 @@ pollNetradyneAlerts();
         const appUser = applyServerUser(data.user, data.account);
         session = { userId: appUser.id };
         currentView = defaultView(appUser);
+        render();
+        await loadAccountsAndUsers();
         render();
         if (appUser.role === "owner") fetchGeotabDriversReadiness();
       } else {
@@ -3155,20 +3073,21 @@ function renderRecapMobileCards(rows) {
             <label>Role</label>
             <select name="role" required>
               <option value="dispatcher">Dispatcher</option>
+              <option value="manager">Manager</option>
               <option value="owner">Owner</option>
-              <option value="admin">Admin</option>
             </select>
           </div>
           <div class="field">
-            <label>Client</label>
-            <select name="clientId">
-              <option value="">NDK Dispatch</option>
-              ${state.clients.map((client) => `<option value="${client.id}">${escapeHtml(client.name)}</option>`).join("")}
+            <label>Account</label>
+            <select name="accountId" required>
+              ${state.clients.length
+                ? state.clients.map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join("")
+                : `<option value="">No accounts available</option>`}
             </select>
           </div>
           <div class="field wide">
             <label>Temporary password</label>
-            <input name="password" required value="Welcome123" />
+            <input name="password" type="text" required placeholder="Set a temporary password" autocomplete="new-password" />
           </div>
         </div>
         <div class="inline-form-actions">
@@ -3958,17 +3877,23 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       showToast("A user with that email already exists.");
       return;
     }
+    // App users carry the account id in `clientId`; the form field is `accountId`.
+    const accountId = data.accountId || getCurrentUser()?.clientId || null;
+    if (!accountId) {
+      showToast("Pick an account for this user.");
+      return;
+    }
     try {
       const res = await fetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
-          email: email,
+          email,
           name: data.name.trim(),
           role: data.role,
           password: data.password,
-          accountId: data.accountId || getCurrentUser().accountId || null
+          accountId,
         }),
       });
       const result = await res.json();
@@ -3976,17 +3901,10 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
         showToast(result.error || "Could not create user.");
         return;
       }
-      // Refresh users from server to get the updated list
-      const accountId = data.accountId || getCurrentUser().accountId || null;
-      const usersRes = await fetch(`/api/admin/users?accountId=${accountId || ''}`, { credentials: "same-origin" });
-      const usersResult = await usersRes.json();
-      if (usersResult.success) {
-        state.users = usersResult.users;
-        saveState();
-      }
+      await loadAccountsAndUsers(); // refresh the real users list from the server
       form.reset();
       render();
-      showToast(`Created ${data.name.trim()} with temporary credentials.`);
+      showToast(`Created ${data.name.trim()}.`);
     } catch (error) {
       console.warn("Create user failed:", error);
       showToast("Could not reach the server. Try again.");
