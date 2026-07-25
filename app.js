@@ -212,10 +212,8 @@ let thresholdNotified = loadNotificationMemory(THRESHOLD_MEMORY_KEY);
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     installPromptEvent = event;
-    render();
+    if (currentView !== "login") render();
   });
-
-  render();
 
   // Auth is server-backed: ignore any stale local session and ask the server who we are.
   session = null;
@@ -382,7 +380,7 @@ if (document.visibilityState === 'visible') {
     ownerHosTotalDrivers = result.totalDrivers || state.hosDrivers.length;
     ownerHosLastGeneratedAt = result.generatedAt || new Date().toISOString();
     saveState();
-    render();
+    if (currentView !== "login") render();
     const currentUser = getCurrentUser();
     if (currentUser?.role === "owner") {
       await queueOwnerHosNotifications(currentUser);
@@ -412,6 +410,7 @@ if (document.visibilityState === 'visible') {
 
   function processLateItems(items) {
     if (!items) return;
+    if (currentView === "login") return;
     state.lateItems = items;
     saveState();
     render();
@@ -421,14 +420,14 @@ if (document.visibilityState === 'visible') {
     stopOwnerHosAutoRefresh();
     ownerHosAutoRefreshEnabled = true;
     ownerHosAutoRefreshTimer = setInterval(fetchGeotabDriversReadiness, ownerHosAutoRefreshMinutes * 60 * 1000);
-    render();
+    if (currentView !== "login") render();
   }
 
   function stopOwnerHosAutoRefresh() {
     if (ownerHosAutoRefreshTimer) clearInterval(ownerHosAutoRefreshTimer);
     ownerHosAutoRefreshTimer = null;
     ownerHosAutoRefreshEnabled = false;
-    render();
+    if (currentView !== "login") render();
   }
 
   function toggleOwnerHosAutoRefresh() {
@@ -454,6 +453,7 @@ async function pollNetradyneAlerts() {
 }
 function processHosItems(items) {
   if (!Array.isArray(items) || items.length === 0) return;
+  if (currentView === "login") return;
 
   state.hosDrivers = items.map((item, index) => {
     const toDisplay = (value) => {
@@ -493,7 +493,7 @@ function processHosItems(items) {
   ownerHosTotalDrivers = state.hosDrivers.length;
   ownerHosLastGeneratedAt = new Date().toISOString();
   saveState();
-  render();
+  if (currentView !== "login") render();
 }
 setInterval(pollNetradyneAlerts, 10000);
 pollNetradyneAlerts();
@@ -718,7 +718,11 @@ pollNetradyneAlerts();
 
   function clientName(clientId) {
     const client = state.clients.find((item) => item.id === clientId);
-    return client ? client.name : "NDK Dispatch";
+    if (client) return client.name;
+    // Server-backed accounts aren't in state.clients; use the signed-in user's account name.
+    const user = getCurrentUser();
+    if (user && user.clientId === clientId && user.accountName) return user.accountName;
+    return "NDK Dispatch";
   }
 
   function clientNameFromState(sourceState, clientId) {
@@ -936,8 +940,20 @@ function renderNetradyneDashboard(user) {
   function render() {
     const user = getCurrentUser();
     if (!user) {
+      // Preserve form values before re-rendering
+      const emailInput = document.getElementById("email");
+      const passwordInput = document.getElementById("password");
+      const emailValue = emailInput ? emailInput.value : "";
+      const passwordValue = passwordInput ? passwordInput.value : "";
+
       app.className = "app";
       app.innerHTML = renderLogin();
+
+      // Restore form values after re-rendering
+      const restoredEmailInput = document.getElementById("email");
+      const restoredPasswordInput = document.getElementById("password");
+      if (restoredEmailInput) restoredEmailInput.value = emailValue;
+      if (restoredPasswordInput) restoredPasswordInput.value = passwordValue;
       return;
     }
 
@@ -1002,11 +1018,11 @@ function renderNetradyneDashboard(user) {
 
             <div class="field">
               <label for="email">Email</label>
-              <input id="email" name="email" type="email" autocomplete="username" required />
+              <input id="email" name="email" type="email" required />
             </div>
             <div class="field">
               <label for="password">Password</label>
-              <input id="password" name="password" type="password" autocomplete="current-password" required />
+              <input id="password" name="password" type="password" required />
             </div>
 
             <div class="login-actions">
@@ -3744,6 +3760,9 @@ case "hos-close-filters":
   }
 
   async function handleChange(event) {
+    // Don't re-render on login view to avoid clearing form inputs
+    if (currentView === "login") return;
+
     const dateSelect = event.target.closest("[data-recap-date]");
     if (dateSelect) {
       selectedRecapDate = dateSelect.value;
@@ -3823,6 +3842,9 @@ case "hos-close-filters":
   }
 
   function handleInput(event) {
+    // Don't re-render on login view to avoid clearing form inputs
+    if (currentView === "login") return;
+
     const hosSearch = event.target.closest("[data-hos-search]");
     if (hosSearch && currentView === "owner-hos") {
       ownerHosSearchText = hosSearch.value;
