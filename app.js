@@ -895,6 +895,23 @@ function renderNetradyneDashboard(user) {
     render();
   }
 
+  // Refresh a single recap row's "has issue" indicator in place (no full re-render,
+  // so the cursor stays put while editing).
+  function updateRecapRowStatus(el, row) {
+    if (!el || !row) return;
+    const missing = (typeof missingRequired === "function") ? missingRequired(row) : [];
+    const hasIssue = Boolean((row.issues && String(row.issues).trim()) || missing.length > 0);
+    if (el.classList && el.classList.contains("recap-card-v2")) {
+      el.classList.toggle("has-issue", hasIssue);
+      const badge = el.querySelector(".rcv-issue-badge");
+      if (badge) {
+        badge.classList.toggle("issue", hasIssue);
+        badge.classList.toggle("clean", !hasIssue);
+        badge.textContent = hasIssue ? "⚠" : "✓";
+      }
+    }
+  }
+
   function render() {
     const user = getCurrentUser();
     if (!user) {
@@ -3798,7 +3815,10 @@ case "hos-close-filters":
       row[field] = recapField.type === "checkbox" ? recapField.checked : recapField.value;
       addAudit(`${getCurrentUser().name} updated ${row.driverAssigned} ${field}.`);
       saveState();
-      render();
+      // No full re-render here: the value is already in the field and saved. Rebuilding
+      // the table would move the cursor/focus and interrupt editing. Just refresh the
+      // row's "has issue / required" styling in place.
+      updateRecapRowStatus(recapField.closest("tr, .recap-card-v2"), row);
       showToast("Daily recap updated.");
       return;
     }
