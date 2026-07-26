@@ -76,9 +76,27 @@ function addColumnIfMissing(table, column, def) {
 }
 addColumnIfMissing("accounts", "telegram_bot_token_enc", "TEXT");
 addColumnIfMissing("accounts", "telegram_chat_id", "TEXT");
+addColumnIfMissing("accounts", "api_key", "TEXT");
 
 const genId = (prefix) => `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
+const genApiKey = () => `ndk_${crypto.randomBytes(24).toString("base64url")}`;
 const slugify = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+// Backfill an API key for any account missing one (extension authentication).
+for (const a of db.prepare("SELECT id FROM accounts WHERE api_key IS NULL OR api_key = ''").all()) {
+  db.prepare("UPDATE accounts SET api_key = ? WHERE id = ?").run(genApiKey(), a.id);
+}
+
+export function getAccountByApiKey(key) {
+  if (!key) return null;
+  return db.prepare("SELECT * FROM accounts WHERE api_key = ?").get(key) || null;
+}
+
+export function regenerateApiKey(accountId) {
+  const key = genApiKey();
+  db.prepare("UPDATE accounts SET api_key = ? WHERE id = ?").run(key, accountId);
+  return key;
+}
 
 // ---------- Accounts ----------
 export function createAccount(input) {
@@ -86,11 +104,12 @@ export function createAccount(input) {
   db.prepare(`INSERT INTO accounts
     (id, name, geotab_server, geotab_database, geotab_username, geotab_password_enc,
      netradyne_email, netradyne_password_enc, netradyne_poll_ms,
-     telegram_bot_token_enc, telegram_chat_id)
+     telegram_bot_token_enc, telegram_chat_id, api_key)
     VALUES (@id,@name,@geotab_server,@geotab_database,@geotab_username,@geotab_password_enc,
      @netradyne_email,@netradyne_password_enc,@netradyne_poll_ms,
-     @telegram_bot_token_enc,@telegram_chat_id)`).run({
+     @telegram_bot_token_enc,@telegram_chat_id,@api_key)`).run({
     id,
+    api_key: genApiKey(),
     name: input.name,
     geotab_server: input.geotabServer || "my.geotab.com",
     geotab_database: input.geotabDatabase || null,
@@ -173,6 +192,9 @@ export function publicAccount(a) {
     hasGeotab: Boolean(a.geotab_username && a.geotab_password_enc),
     hasNetradyne: Boolean(a.netradyne_email && a.netradyne_password_enc),
     hasTelegram: Boolean(a.telegram_chat_id),
+    // The account's own extension API key (shown to its owner/dispatchers to configure
+    // the browser extension). It only ever accompanies the user's own account.
+    apiKey: a.api_key || null,
   };
 }
 

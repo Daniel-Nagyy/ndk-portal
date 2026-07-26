@@ -13,8 +13,9 @@ import {
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
-  getRecaps, syncRecaps
+  getRecaps, syncRecaps, getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
+import { setLateItems, getLateItems, getIngestStatus } from './ingest-store.mjs';
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
 import { startHosEngine } from './hos-engine.mjs';
@@ -292,14 +293,13 @@ const requestHandler = (req, res) => {  // CORS Headers
     }
   }
 
-  // API Endpoints
+  // API Endpoints — HOS stays the Portal's own Geotab integration (unchanged).
   if (req.url === '/api/hos') {
     if (req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, data: latestHosData }));
       return;
-    } 
-    
+    }
     if (req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk.toString(); });
@@ -317,6 +317,37 @@ const requestHandler = (req, res) => {  // CORS Headers
       });
       return;
     }
+  }
+
+  // ---------- Extension ingestion (Relay late items only; API-key authenticated) ----------
+  if (req.url && req.url.startsWith('/api/ingest/')) {
+    const iurl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (iurl.pathname === '/api/ingest/status' && req.method === 'GET') {
+      const user = getAuthUser(req);
+      if (!user) return sendJson(401, { success: false, error: 'Not authenticated' });
+      if (user.role === 'superadmin') {
+        const out = listAccounts().map((a) => ({ account: a.name, id: a.id, ...getIngestStatus(a.id) }));
+        return sendJson(200, { success: true, accounts: out });
+      }
+      return sendJson(200, { success: true, accounts: [{ id: user.account_id, ...getIngestStatus(user.account_id) }] });
+    }
+    (async () => {
+      try {
+        const apiKey = req.headers['x-api-key'] || iurl.searchParams.get('apiKey');
+        const account = getAccountByApiKey(apiKey);
+        if (!account) return sendJson(401, { success: false, error: 'Invalid or missing API key' });
+        const body = await readJsonBody(req);
+        if (iurl.pathname === '/api/ingest/late-items') {
+          const items = Array.isArray(body) ? body : (body.lateItems || body.items || []);
+          setLateItems(account.id, items);
+          return sendJson(200, { success: true, account: account.id, count: items.length });
+        }
+        return sendJson(404, { success: false, error: 'Unknown ingest endpoint' });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
   }
 
 
@@ -721,29 +752,13 @@ const requestHandler = (req, res) => {  // CORS Headers
   }
 
   // ---------- Existing late-items (restored cleanly) ----------
-  if (url.pathname === '/api/late-items') {
-    if (req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, data: latestLateItemsData }));
-      return;
-    }
-    if (req.method === 'POST') {
-      let body = '';
-      req.on('data', chunk => { body += chunk.toString(); });
-      req.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          if (Array.isArray(parsed)) latestLateItemsData = parsed;
-          else if (parsed.lateItems) latestLateItemsData = parsed.lateItems;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true }));
-        } catch (e) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
-        }
-      });
-      return;
-    }
+  // Live Relay late items for the logged-in user's account (fed by the extension).
+  if (url.pathname === '/api/late-items' && req.method === 'GET') {
+    const user = getAuthUser(req);
+    const data = user && user.account_id ? getLateItems(user.account_id) : [];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, data }));
+    return;
   }
 if (url.pathname.startsWith('/api/netradyne/alerts/') && req.method === 'PATCH') {
   (async () => {
