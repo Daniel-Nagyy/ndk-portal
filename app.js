@@ -2879,7 +2879,7 @@ function renderRecapMobileCards(rows) {
   }
 
   function makeStartingMessage(row) {
-    return `Hello ${row.driverAssigned}, you are assigned to trip ${row.tripId} / block ${row.blockId}. Requested yard time is ${row.requestedStart}, first upcoming arrival is ${row.stopOneupcoming}, truck ${row.truck || "TBD"}. Please complete HOS pre-check and ${row.dvir || "DVIR"} before departure.`;
+    return `Hello ${row.driverAssigned},  Requested yard time is ${row.requestedStart}, truck ${row.truck || "TBD"}. Please complete HOS pre-check and DVIR before departure.`;
   }
 
   function renderShiftsPage(user) {
