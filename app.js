@@ -4178,9 +4178,9 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       const first = groupRows[0];
       const blockId = csvValue(first, "Block ID");
       const tripId = csvValue(first, "Trip ID");
-      const stopOneTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 1 upcoming Arrival Date", "Stop 1 upcoming Arrival Time")).filter(Boolean);
+      const stopOneTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 1 Planned Arrival Date", "Stop 1 Planned Arrival Time")).filter(Boolean);
       const actualStopOneTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 1 Actual Arrival Date", "Stop 1 Actual Arrival Time")).filter(Boolean);
-      const finalupcomingTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 2 upcoming Arrival Date", "Stop 2 upcoming Arrival Time")).filter(Boolean);
+      const finalupcomingTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 2 Planned Arrival Date", "Stop 2 Planned Arrival Time")).filter(Boolean);
       const earliestStopOne = earliestDateTime(stopOneTimes);
       const earliestActual = earliestDateTime(actualStopOneTimes);
       const latestFinal = latestDateTime(finalupcomingTimes);
