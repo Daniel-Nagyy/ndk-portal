@@ -45,6 +45,7 @@
 let netradyneSortColumn = 'occurredAt'; // default sort by date newest first
 let netradyneSortDir = 'desc';
   let selectedRecapDate = getDefaultRecapDate(getCurrentUser());
+  let expandedRecapIds = new Set(); // which mobile recap cards are expanded (survives re-render)
   let searchText = "";
   let ownerHosSearchText = "";
   let ownerHosStatusFilter = "";
@@ -90,7 +91,7 @@ let thresholdNotified = loadNotificationMemory(THRESHOLD_MEMORY_KEY);
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     installPromptEvent = event;
-    if (currentView !== "login") render();
+    backgroundRender();
   });
 
   // Auth is server-backed: ignore any stale local session and ask the server who we are.
@@ -120,7 +121,8 @@ let thresholdNotified = loadNotificationMemory(THRESHOLD_MEMORY_KEY);
 
 async function fetchGeotabDriversReadiness() {
   const user = getCurrentUser();
-  if (!user || user.role !== 'owner') return;
+  // HOS is available to owners/managers AND dispatchers (dispatch view has an HOS tab).
+  if (!user || !["owner", "dispatcher"].includes(user.role)) return;
   ownerHosIsLoading = true;
   try {
     const response = await fetch('/api/drivers-readiness');
@@ -258,7 +260,7 @@ if (document.visibilityState === 'visible') {
     ownerHosTotalDrivers = result.totalDrivers || state.hosDrivers.length;
     ownerHosLastGeneratedAt = result.generatedAt || new Date().toISOString();
     saveState();
-    if (currentView !== "login") render();
+    backgroundRender();
     const currentUser = getCurrentUser();
     if (currentUser?.role === "owner") {
       await queueOwnerHosNotifications(currentUser);
@@ -291,21 +293,21 @@ if (document.visibilityState === 'visible') {
     if (currentView === "login") return;
     state.lateItems = items;
     saveState();
-    render();
+    backgroundRender();
   }
 
   function startOwnerHosAutoRefresh() {
     stopOwnerHosAutoRefresh();
     ownerHosAutoRefreshEnabled = true;
     ownerHosAutoRefreshTimer = setInterval(fetchGeotabDriversReadiness, ownerHosAutoRefreshMinutes * 60 * 1000);
-    if (currentView !== "login") render();
+    backgroundRender();
   }
 
   function stopOwnerHosAutoRefresh() {
     if (ownerHosAutoRefreshTimer) clearInterval(ownerHosAutoRefreshTimer);
     ownerHosAutoRefreshTimer = null;
     ownerHosAutoRefreshEnabled = false;
-    if (currentView !== "login") render();
+    backgroundRender();
   }
 
   function toggleOwnerHosAutoRefresh() {
@@ -371,7 +373,7 @@ function processHosItems(items) {
   ownerHosTotalDrivers = state.hosDrivers.length;
   ownerHosLastGeneratedAt = new Date().toISOString();
   saveState();
-  if (currentView !== "login") render();
+  backgroundRender();
 }
 setInterval(pollNetradyneAlerts, 10000);
 pollNetradyneAlerts();
@@ -483,7 +485,7 @@ pollNetradyneAlerts();
     normalized.recaps = normalized.recaps.filter((row) => !String(row.tripId || "").startsWith("Pending-"));
 
     normalized.recaps.forEach((row) => {
-      row.dailyDate = row.dailyDate || "2026-06-15";
+      row.dailyDate = row.dailyDate || todayISO();
       row.importSource = row.importSource || "Manual";
       row.importedAt = row.importedAt || "";
       if (!Array.isArray(row.vrids)) {
@@ -827,7 +829,7 @@ function renderNetradyneDashboard(user) {
   }
 
   function getDefaultRecapDate(user) {
-    return availableRecapDates(user)[0] || "2026-06-15";
+    return availableRecapDates(user)[0] || todayISO();
   }
 
   function canSeeClient(user, clientId) {
@@ -838,7 +840,7 @@ function renderNetradyneDashboard(user) {
   function ensureSelectedRecapDate(user) {
     const dates = availableRecapDates(user);
     if (!dates.length) {
-      selectedRecapDate = "2026-06-15";
+      selectedRecapDate = todayISO();
       return;
     }
     if (!dates.includes(selectedRecapDate)) {
@@ -878,6 +880,19 @@ function renderNetradyneDashboard(user) {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  // Re-render triggered by a background poll (every 10s). Skip the full DOM rebuild
+  // when it would disrupt the user: while typing, or on data-entry/detail views where
+  // a rebuild wipes what they're doing (e.g. daily recap). Data still updates in state
+  // and the view refreshes when they navigate or interact.
+  const DATA_ENTRY_VIEWS = ["recap", "owner-recap", "dispatcher-recap", "users", "clients", "announcements", "settings"];
+  function backgroundRender() {
+    if (currentView === "login") return;
+    const ae = document.activeElement;
+    const typing = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || "");
+    if (typing || DATA_ENTRY_VIEWS.includes(currentView)) return;
+    render();
   }
 
   function render() {
@@ -1071,13 +1086,19 @@ function renderTopbar(user) {
   `;
 }
 
+  // Local calendar date as YYYY-MM-DD (used as the recap default instead of a fixed date).
+  function todayISO() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
   function todayLabel() {
     return new Intl.DateTimeFormat("en-US", {
       weekday: "short",
       month: "short",
       day: "numeric",
       year: "numeric",
-    }).format(new Date("2026-06-15T12:00:00"));
+    }).format(new Date());
   }
 
   function getNavItems(role) {
@@ -1105,6 +1126,8 @@ function renderTopbar(user) {
     }
     return [
       { id: "my-shifts", label: "My Shifts", icon: "my-shifts" },
+      { id: "owner-hos", label: "HOS Risks", icon: "owner-hos" },
+      { id: "netradyne-dashboard", label: "Netradyne Alerts", icon: "netradyne-dashboard" },
       { id: "dispatcher-recap", label: "Daily Recap", icon: "recap" },
       { id: "takeover", label: "Takeover Board", icon: "takeover" },
       { id: "announcements", label: "Announcements", icon: "announcements" },
@@ -2644,6 +2667,7 @@ function renderRecapMobileCards(rows) {
             <strong>${escapeHtml(value || '–')}</strong>
           </div>`;
 
+        const isExpanded = expandedRecapIds.has(row.id);
         return `
           <article class="recap-card-v2 ${hasIssue ? 'has-issue' : ''}" data-recap-id="${row.id}">
             <div class="rcv-header recap-toggle" data-action="toggle-recap-detail" data-recap-id="${row.id}">
@@ -2656,10 +2680,10 @@ function renderRecapMobileCards(rows) {
               <div class="rcv-badges">
                 ${renderStatusPill(row.status)}
                 <span class="rcv-issue-badge ${hasIssue ? 'issue' : 'clean'}">${hasIssue ? '⚠' : '✓'}</span>
-                <span class="rcv-expand-icon">▼</span>
+                <span class="rcv-expand-icon">${isExpanded ? '▲' : '▼'}</span>
               </div>
             </div>
-            <div class="recap-details" style="display:none;">
+            <div class="recap-details" style="display:${isExpanded ? 'grid' : 'none'};">
               ${field('Status', row.status)}
               ${field('Trip ID', row.tripId)}
               ${field('Block ID', row.blockId)}
@@ -2950,7 +2974,7 @@ function renderRecapMobileCards(rows) {
           </div>
           <div class="field">
             <label>Date</label>
-            <input name="date" type="date" value="2026-06-15" required />
+            <input name="date" type="date" value="${todayISO()}" required />
           </div>
           <div class="field">
             <label>Start</label>
@@ -3244,7 +3268,7 @@ function renderRecapMobileCards(rows) {
           </div>
           <div class="field">
             <label>Date</label>
-            <input name="date" type="date" value="2026-06-15" required />
+            <input name="date" type="date" value="${todayISO()}" required />
           </div>
           <div class="field wide">
             <label>Message</label>
@@ -3593,9 +3617,10 @@ if (sortBtn && currentView === 'netradyne-dashboard') {
       currentView = viewButton.dataset.view;
       sidebarOpen = false;
       render();
-      if (currentView === "owner-hos" && getCurrentUser()?.role === "owner") {
+      if (currentView === "owner-hos" && ["owner", "dispatcher"].includes(getCurrentUser()?.role)) {
         await fetchGeotabDriversReadiness();
       }
+      if (currentView === "netradyne-dashboard") pollNetradyneAlerts();
       return;
     }
 
@@ -3630,6 +3655,7 @@ if (sortBtn && currentView === 'netradyne-dashboard') {
 const recapToggle = event.target.closest("[data-action='toggle-recap-detail']");
 if (recapToggle) {
   event.preventDefault();
+  const id = recapToggle.dataset.recapId;
   const card = recapToggle.closest('.recap-card-v2');
   if (card) {
     const details = card.querySelector('.recap-details');
@@ -3638,6 +3664,8 @@ if (recapToggle) {
       const isOpen = details.style.display === 'grid';
       details.style.display = isOpen ? 'none' : 'grid';
       if (icon) icon.textContent = isOpen ? '▼' : '▲';
+      // Remember so a background re-render doesn't collapse the card.
+      if (isOpen) expandedRecapIds.delete(id); else expandedRecapIds.add(id);
     }
   }
   return;
@@ -4127,7 +4155,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       const earliestStopOne = earliestDateTime(stopOneTimes);
       const earliestActual = earliestDateTime(actualStopOneTimes);
       const latestFinal = latestDateTime(finalupcomingTimes);
-      const dailyDate = earliestStopOne?.date || selectedRecapDate || "2026-06-15";
+      const dailyDate = earliestStopOne?.date || selectedRecapDate || todayISO();
       const loadIds = unique(groupRows.map((row) => csvValue(row, "Load ID")).filter(Boolean));
       const truck = firstNonEmpty(groupRows, ["Tractor Vehicle ID"]);
 
