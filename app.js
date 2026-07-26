@@ -3813,6 +3813,15 @@ case "hos-close-filters":
       if (!row) return;
       const field = recapField.dataset.recapField;
       row[field] = recapField.type === "checkbox" ? recapField.checked : recapField.value;
+      // Requested Start is always 30 minutes before Stop 1 upcoming.
+      if (field === "stopOneupcoming") {
+        const computed = subtractMinutes(row.stopOneupcoming, 30);
+        if (computed) {
+          row.requestedStart = computed;
+          const rsInput = recapField.closest("tr, .recap-card-v2")?.querySelector('[data-recap-field="requestedStart"]');
+          if (rsInput) rsInput.value = computed; // update in place, no full re-render
+        }
+      }
       addAudit(`${getCurrentUser().name} updated ${row.driverAssigned} ${field}.`);
       saveState();
       // No full re-render here: the value is already in the field and saved. Rebuilding
@@ -4196,7 +4205,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
         dvir: "Not Started",
         fuel: "",
         onDuty: "",
-        requestedStart: earliestStopOne ? subtractMinutes(earliestStopOne.time, 25) : "",
+        requestedStart: earliestStopOne ? subtractMinutes(earliestStopOne.time, 30) : "",
         stopOneupcoming: earliestStopOne?.time || "",
         actualCheckIn: earliestActual ? `${earliestActual.date} ${earliestActual.time}` : "",
         scheduledFinal: latestFinal?.time || "",
