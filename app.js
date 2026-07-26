@@ -2879,7 +2879,7 @@ function renderRecapMobileCards(rows) {
   }
 
   function makeStartingMessage(row) {
-    return `Hello ${row.driverAssigned},  Requested yard time is ${row.requestedStart}, truck ${row.truck || "TBD"}, fuel ${row.fuel || "N/A"}. Please complete HOS pre-check and DVIR before departure.`;
+    return `Hello ${row.driverAssigned},  Requested yard time is ${row.requestedStart}, truck ${row.truck || "TBD"}, fuel ${row.fuel || "N/A"}%. Please complete HOS pre-check and DVIR before departure.`;
   }
 
   function renderShiftsPage(user) {
