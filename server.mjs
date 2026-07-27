@@ -16,6 +16,9 @@ import {
   getRecaps, syncRecaps, getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus } from './ingest-store.mjs';
+
+// Per-account dedupe for live extension alerts (accountId:dedupeKey -> lastSentMs).
+const alertDedupe = new Map();
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
 import { startHosEngine } from './hos-engine.mjs';
@@ -341,6 +344,29 @@ const requestHandler = (req, res) => {  // CORS Headers
           const items = Array.isArray(body) ? body : (body.lateItems || body.items || []);
           setLateItems(account.id, items);
           return sendJson(200, { success: true, account: account.id, count: items.length });
+        }
+        if (iurl.pathname === '/api/ingest/alert') {
+          // Push a live extension-detected alert (e.g. bobtail-not-cleared) to
+          // every device/Telegram on this account (dispatch + owner).
+          const title = String(body.title || 'Dispatch alert').slice(0, 120);
+          const alertBody = String(body.body || '').slice(0, 500);
+          const dedupe = String(body.dedupe || body.tag || title).slice(0, 200);
+          const cooldownMs = 9 * 60 * 1000;
+          const now = Date.now();
+          const last = alertDedupe.get(`${account.id}:${dedupe}`);
+          if (last && now - last < cooldownMs) {
+            return sendJson(200, { success: true, account: account.id, deduped: true });
+          }
+          alertDedupe.set(`${account.id}:${dedupe}`, now);
+          await notifyAccount(account.id, {
+            title,
+            body: alertBody,
+            tag: dedupe,
+            critical: body.critical !== false,
+            url: '/',
+            telegramText: `<b>${title}</b>\n${alertBody}`,
+          });
+          return sendJson(200, { success: true, account: account.id });
         }
         return sendJson(404, { success: false, error: 'Unknown ingest endpoint' });
       } catch (error) {
