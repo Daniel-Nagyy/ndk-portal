@@ -40,6 +40,7 @@
   let session = loadSession();
   let currentView = defaultView(getCurrentUser());
   let recapFilter = "all";
+  let editingAccountId = null; // when set, the Accounts form edits this account instead of creating
   let netradyneAlerts = [];
   let netradyneSearchText = '';
 let netradyneSortColumn = 'occurredAt'; // default sort by date newest first
@@ -626,6 +627,11 @@ pollNetradyneAlerts();
           name: a.name,
           active: true,
           apiKey: a.apiKey || null,
+          geotabServer: a.geotabServer || "",
+          geotabDatabase: a.geotabDatabase || "",
+          geotabUsername: a.geotabUsername || "",
+          netradyneEmail: a.netradyneEmail || "",
+          telegramChatId: a.telegramChatId || "",
           hasGeotab: Boolean(a.hasGeotab),
           hasNetradyne: Boolean(a.hasNetradyne),
           hasTelegram: Boolean(a.hasTelegram),
@@ -3211,6 +3217,8 @@ function renderRecapMobileCards(rows) {
                           style="flex:1;font-family:monospace;font-size:12px" title="Extension API key" />
                         <button type="button" class="btn btn-secondary"
                           data-copy-key="${escapeHtml(client.apiKey || "")}">Copy key</button>
+                        <button type="button" class="btn btn-secondary"
+                          data-edit-account="${escapeHtml(client.id)}">Edit</button>
                       </div>
                     </div>
                   `
@@ -3219,44 +3227,63 @@ function renderRecapMobileCards(rows) {
             </div>
           </div>
         </div>
-        <form class="form-card" data-form="client">
-          <h3>Add account</h3>
-          <p>Create the workspace and its integration credentials. An API key is generated automatically.</p>
-          <div class="form-grid">
-            <div class="field wide">
-              <label>Account name</label>
-              <input name="name" required placeholder="Freedom" />
-            </div>
-            <div class="field">
-              <label>Geotab username / email</label>
-              <input name="geotabUsername" placeholder="dispatch@company.com" autocomplete="off" />
-            </div>
-            <div class="field">
-              <label>Geotab password</label>
-              <input name="geotabPassword" type="password" autocomplete="new-password" />
-            </div>
-            <div class="field">
-              <label>Netradyne username / email</label>
-              <input name="netradyneEmail" placeholder="abcd.001m" autocomplete="off" />
-            </div>
-            <div class="field">
-              <label>Netradyne password</label>
-              <input name="netradynePassword" type="password" autocomplete="new-password" />
-            </div>
-            <div class="field">
-              <label>Telegram bot token <span style="opacity:.6">(optional)</span></label>
-              <input name="telegramBotToken" autocomplete="off" placeholder="123456:ABC..." />
-            </div>
-            <div class="field">
-              <label>Telegram chat ID <span style="opacity:.6">(optional)</span></label>
-              <input name="telegramChatId" autocomplete="off" placeholder="-100..." />
-            </div>
-          </div>
-          <div class="inline-form-actions">
-            <button class="btn btn-primary" type="submit">Create account</button>
-          </div>
-        </form>
+        ${renderAccountForm()}
       </div>
+    `;
+  }
+
+  function renderAccountForm() {
+    const editing = editingAccountId ? state.clients.find((c) => c.id === editingAccountId) : null;
+    const v = (x) => escapeHtml(x || "");
+    const pwPlaceholder = editing ? "leave blank to keep current" : "";
+    return `
+      <form class="form-card" data-form="client">
+        <h3>${editing ? `Edit account — ${v(editing.name)}` : "Add account"}</h3>
+        <p>Geotab needs the <strong>Database</strong> (the company name from your Geotab login screen) or it falls back to the default account.</p>
+        <input type="hidden" name="id" value="${editing ? v(editing.id) : ""}" />
+        <div class="form-grid">
+          <div class="field wide">
+            <label>Account name</label>
+            <input name="name" ${editing ? "" : "required"} placeholder="Freedom" value="${editing ? v(editing.name) : ""}" />
+          </div>
+          <div class="field">
+            <label>Geotab database</label>
+            <input name="geotabDatabase" placeholder="company_db" autocomplete="off" value="${editing ? v(editing.geotabDatabase) : ""}" />
+          </div>
+          <div class="field">
+            <label>Geotab server <span style="opacity:.6">(optional)</span></label>
+            <input name="geotabServer" placeholder="my.geotab.com" autocomplete="off" value="${editing ? v(editing.geotabServer) : ""}" />
+          </div>
+          <div class="field">
+            <label>Geotab username / email</label>
+            <input name="geotabUsername" placeholder="dispatch@company.com" autocomplete="off" value="${editing ? v(editing.geotabUsername) : ""}" />
+          </div>
+          <div class="field">
+            <label>Geotab password</label>
+            <input name="geotabPassword" type="password" autocomplete="new-password" placeholder="${pwPlaceholder}" />
+          </div>
+          <div class="field">
+            <label>Netradyne username / email</label>
+            <input name="netradyneEmail" placeholder="abcd.001m" autocomplete="off" value="${editing ? v(editing.netradyneEmail) : ""}" />
+          </div>
+          <div class="field">
+            <label>Netradyne password</label>
+            <input name="netradynePassword" type="password" autocomplete="new-password" placeholder="${pwPlaceholder}" />
+          </div>
+          <div class="field">
+            <label>Telegram bot token <span style="opacity:.6">(optional)</span></label>
+            <input name="telegramBotToken" autocomplete="off" placeholder="${editing ? pwPlaceholder : "123456:ABC..."}" />
+          </div>
+          <div class="field">
+            <label>Telegram chat ID <span style="opacity:.6">(optional)</span></label>
+            <input name="telegramChatId" autocomplete="off" placeholder="-100..." value="${editing ? v(editing.telegramChatId) : ""}" />
+          </div>
+        </div>
+        <div class="inline-form-actions">
+          <button class="btn btn-primary" type="submit">${editing ? "Save changes" : "Create account"}</button>
+          ${editing ? `<button class="btn btn-secondary" type="button" data-cancel-edit="1">Cancel</button>` : ""}
+        </div>
+      </form>
     `;
   }
 
@@ -3657,6 +3684,17 @@ if (document.visibilityState === 'visible') {
       } catch (_) {
         showToast(key ? `API key: ${key}` : "No API key.");
       }
+      return;
+    }
+    const editAccountBtn = event.target.closest("[data-edit-account]");
+    if (editAccountBtn) {
+      editingAccountId = editAccountBtn.getAttribute("data-edit-account");
+      render();
+      return;
+    }
+    if (event.target.closest("[data-cancel-edit]")) {
+      editingAccountId = null;
+      render();
       return;
     }
     // Dismiss push banner
@@ -4062,31 +4100,51 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
   }
 
   async function createClient(data, form) {
+    const isEdit = Boolean(data.id);
     const name = (data.name || "").trim();
-    if (!name) return showToast("Account name is required.");
+    if (!isEdit && !name) return showToast("Account name is required.");
+    // On create, blank fields are omitted. On edit, blank text fields are still sent
+    // (so you can clear them), but blank passwords/tokens are omitted to keep current.
+    const t = (x) => (x || "").trim();
+    const payload = isEdit
+      ? {
+          id: data.id,
+          name: name || undefined,
+          geotabServer: t(data.geotabServer),
+          geotabDatabase: t(data.geotabDatabase),
+          geotabUsername: t(data.geotabUsername),
+          geotabPassword: data.geotabPassword || undefined,
+          netradyneEmail: t(data.netradyneEmail),
+          netradynePassword: data.netradynePassword || undefined,
+          telegramBotToken: data.telegramBotToken || undefined,
+          telegramChatId: t(data.telegramChatId),
+        }
+      : {
+          name,
+          geotabServer: t(data.geotabServer) || undefined,
+          geotabDatabase: t(data.geotabDatabase) || undefined,
+          geotabUsername: t(data.geotabUsername) || undefined,
+          geotabPassword: data.geotabPassword || undefined,
+          netradyneEmail: t(data.netradyneEmail) || undefined,
+          netradynePassword: data.netradynePassword || undefined,
+          telegramBotToken: t(data.telegramBotToken) || undefined,
+          telegramChatId: t(data.telegramChatId) || undefined,
+        };
     try {
       const res = await fetch("/api/admin/accounts", {
-        method: "POST",
+        method: isEdit ? "PUT" : "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          geotabUsername: (data.geotabUsername || "").trim() || undefined,
-          geotabPassword: data.geotabPassword || undefined,
-          netradyneEmail: (data.netradyneEmail || "").trim() || undefined,
-          netradynePassword: data.netradynePassword || undefined,
-          telegramBotToken: (data.telegramBotToken || "").trim() || undefined,
-          telegramChatId: (data.telegramChatId || "").trim() || undefined,
-        }),
+        body: JSON.stringify(payload),
       });
       const out = await res.json();
-      if (!out.success) return showToast(out.error || "Could not create account.");
-      form.reset();
+      if (!out.success) return showToast(out.error || "Could not save account.");
+      editingAccountId = null;
       await loadAccountsAndUsers();
       render();
-      showToast(`Account "${name}" created. API key is shown in the list.`);
+      showToast(isEdit ? `Account "${name}" updated.` : `Account "${name}" created. API key is in the list.`);
     } catch (error) {
-      showToast("Network error creating account.");
+      showToast("Network error saving account.");
     }
   }
 

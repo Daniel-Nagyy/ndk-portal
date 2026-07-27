@@ -10,7 +10,7 @@ import { getAuthenticatedContext } from './netradyne/auth.js';
 import { pushConfigured, getVapidPublicKey, removeSubscription, subscriptionCount } from './push.mjs';
 import {
   bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
-  publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount,
+  publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount, updateAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
   getRecaps, syncRecaps, getAccountByApiKey, regenerateApiKey
@@ -256,6 +256,23 @@ const requestHandler = (req, res) => {  // CORS Headers
         const body = await readJsonBody(req);
         if (!body.name) return sendJson(400, { success: false, error: 'name required' });
         const acct = createAccount(body);
+        sendJson(200, { success: true, account: dbPublicAccount(acct) });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
+  if (req.url === '/api/admin/accounts' && (req.method === 'PUT' || req.method === 'PATCH')) {
+    (async () => {
+      try {
+        const user = getAuthUser(req);
+        if (!user || user.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+        const body = await readJsonBody(req);
+        if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+        // updateAccount only changes provided keys; blank passwords are left untouched.
+        const acct = updateAccount(body.id, body);
         sendJson(200, { success: true, account: dbPublicAccount(acct) });
       } catch (error) {
         sendJson(500, { success: false, error: simplifyError(error) });

@@ -188,7 +188,11 @@ export function publicAccount(a) {
   return {
     id: a.id,
     name: a.name,
+    geotabServer: a.geotab_server,
     geotabDatabase: a.geotab_database,
+    geotabUsername: a.geotab_username,      // non-secret identifier (email); password never exposed
+    netradyneEmail: a.netradyne_email,      // non-secret identifier; password never exposed
+    telegramChatId: a.telegram_chat_id,
     hasGeotab: Boolean(a.geotab_username && a.geotab_password_enc),
     hasNetradyne: Boolean(a.netradyne_email && a.netradyne_password_enc),
     hasTelegram: Boolean(a.telegram_chat_id),
