@@ -621,7 +621,15 @@ pollNetradyneAlerts();
         fetch("/api/admin/users", { credentials: "same-origin" }).then((r) => r.json()).catch(() => null),
       ]);
       if (accRes && accRes.success) {
-        state.clients = accRes.accounts.map((a) => ({ id: a.id, name: a.name, active: true }));
+        state.clients = accRes.accounts.map((a) => ({
+          id: a.id,
+          name: a.name,
+          active: true,
+          apiKey: a.apiKey || null,
+          hasGeotab: Boolean(a.hasGeotab),
+          hasNetradyne: Boolean(a.hasNetradyne),
+          hasTelegram: Boolean(a.hasTelegram),
+        }));
       }
       if (usrRes && usrRes.success) {
         const current = getCurrentUser();
@@ -3164,11 +3172,14 @@ function renderRecapMobileCards(rows) {
   }
 
   function renderClientsPage() {
+    const badge = (on, label) =>
+      `<span class="pill ${on ? "green" : "gray"}">${label}${on ? " ✓" : ""}</span>`;
+
     return `
       <div class="section-title">
         <div>
-          <h2>Client access</h2>
-          <p>Owner accounts are tied to clients so they only see their shifts, recaps, and performance data.</p>
+          <h2>Accounts</h2>
+          <p>Each account has its own Geotab, Netradyne, Telegram, and an API key for the browser extension.</p>
         </div>
       </div>
 
@@ -3176,8 +3187,8 @@ function renderRecapMobileCards(rows) {
         <div class="panel">
           <div class="panel-header">
             <div>
-              <h3>Clients</h3>
-              <p>${state.clients.length} configured owner workspaces.</p>
+              <h3>Accounts</h3>
+              <p>${state.clients.length} configured.</p>
             </div>
           </div>
           <div class="panel-body">
@@ -3185,12 +3196,22 @@ function renderRecapMobileCards(rows) {
               ${state.clients
         .map(
           (client) => `
-                    <div class="mini-item">
-                      <div>
+                    <div class="mini-item" style="flex-direction:column;align-items:stretch;gap:8px">
+                      <div style="display:flex;justify-content:space-between;align-items:center">
                         <strong>${escapeHtml(client.name)}</strong>
-                        <span>${client.fleetSize} trucks · Account manager ${escapeHtml(client.accountManager)}</span>
+                        <span class="pill ${client.active ? "green" : "gray"}">${client.active ? "Active" : "Inactive"}</span>
                       </div>
-                      <span class="pill ${client.active ? "green" : "gray"}">${client.active ? "Active" : "Inactive"}</span>
+                      <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        ${badge(client.hasGeotab, "Geotab")}
+                        ${badge(client.hasNetradyne, "Netradyne")}
+                        ${badge(client.hasTelegram, "Telegram")}
+                      </div>
+                      <div style="display:flex;gap:8px;align-items:center">
+                        <input readonly value="${escapeHtml(client.apiKey || "")}"
+                          style="flex:1;font-family:monospace;font-size:12px" title="Extension API key" />
+                        <button type="button" class="btn btn-secondary"
+                          data-copy-key="${escapeHtml(client.apiKey || "")}">Copy key</button>
+                      </div>
                     </div>
                   `
         )
@@ -3199,24 +3220,40 @@ function renderRecapMobileCards(rows) {
           </div>
         </div>
         <form class="form-card" data-form="client">
-          <h3>Add client</h3>
-          <p>Create the company workspace first, then register owner accounts.</p>
+          <h3>Add account</h3>
+          <p>Create the workspace and its integration credentials. An API key is generated automatically.</p>
           <div class="form-grid">
             <div class="field wide">
-              <label>Company name</label>
-              <input name="name" required placeholder="Carrier LLC" />
+              <label>Account name</label>
+              <input name="name" required placeholder="Freedom" />
             </div>
             <div class="field">
-              <label>Fleet size</label>
-              <input name="fleetSize" type="number" min="1" value="10" required />
+              <label>Geotab username / email</label>
+              <input name="geotabUsername" placeholder="dispatch@company.com" autocomplete="off" />
             </div>
             <div class="field">
-              <label>Account manager</label>
-              <input name="accountManager" value="Daniel Nagy" required />
+              <label>Geotab password</label>
+              <input name="geotabPassword" type="password" autocomplete="new-password" />
+            </div>
+            <div class="field">
+              <label>Netradyne username / email</label>
+              <input name="netradyneEmail" placeholder="abcd.001m" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label>Netradyne password</label>
+              <input name="netradynePassword" type="password" autocomplete="new-password" />
+            </div>
+            <div class="field">
+              <label>Telegram bot token <span style="opacity:.6">(optional)</span></label>
+              <input name="telegramBotToken" autocomplete="off" placeholder="123456:ABC..." />
+            </div>
+            <div class="field">
+              <label>Telegram chat ID <span style="opacity:.6">(optional)</span></label>
+              <input name="telegramChatId" autocomplete="off" placeholder="-100..." />
             </div>
           </div>
           <div class="inline-form-actions">
-            <button class="btn btn-primary" type="submit">Create client</button>
+            <button class="btn btn-primary" type="submit">Create account</button>
           </div>
         </form>
       </div>
@@ -3611,6 +3648,17 @@ if (document.visibilityState === 'visible') {
   }
 
   async function handleClick(event) {
+    const copyKeyBtn = event.target.closest("[data-copy-key]");
+    if (copyKeyBtn) {
+      const key = copyKeyBtn.getAttribute("data-copy-key") || "";
+      try {
+        await navigator.clipboard.writeText(key);
+        showToast("API key copied.");
+      } catch (_) {
+        showToast(key ? `API key: ${key}` : "No API key.");
+      }
+      return;
+    }
     // Dismiss push banner
 if (event.target.closest('[data-action="dismiss-banner"]')) {
   const banner = document.getElementById('pushBanner');
@@ -4013,25 +4061,33 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
     showToast("Shift created.");
   }
 
-  function createClient(data, form) {
-    const id = data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-    if (state.clients.some((client) => client.id === id)) {
-      showToast("That client already exists.");
-      return;
+  async function createClient(data, form) {
+    const name = (data.name || "").trim();
+    if (!name) return showToast("Account name is required.");
+    try {
+      const res = await fetch("/api/admin/accounts", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          geotabUsername: (data.geotabUsername || "").trim() || undefined,
+          geotabPassword: data.geotabPassword || undefined,
+          netradyneEmail: (data.netradyneEmail || "").trim() || undefined,
+          netradynePassword: data.netradynePassword || undefined,
+          telegramBotToken: (data.telegramBotToken || "").trim() || undefined,
+          telegramChatId: (data.telegramChatId || "").trim() || undefined,
+        }),
+      });
+      const out = await res.json();
+      if (!out.success) return showToast(out.error || "Could not create account.");
+      form.reset();
+      await loadAccountsAndUsers();
+      render();
+      showToast(`Account "${name}" created. API key is shown in the list.`);
+    } catch (error) {
+      showToast("Network error creating account.");
     }
-    state.clients.push({
-      id,
-      name: data.name.trim(),
-      ownerUserId: null,
-      fleetSize: Number(data.fleetSize),
-      active: true,
-      accountManager: data.accountManager.trim(),
-    });
-    addAudit(`${getCurrentUser().name} created client ${data.name}.`);
-    saveState();
-    form.reset();
-    render();
-    showToast("Client created.");
   }
 
   function createAnnouncement(data, form) {
