@@ -170,7 +170,7 @@ function simplifyError(err) {
 const requestHandler = (req, res) => {  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -358,15 +358,15 @@ const requestHandler = (req, res) => {  // CORS Headers
             return sendJson(200, { success: true, account: account.id, deduped: true });
           }
           alertDedupe.set(`${account.id}:${dedupe}`, now);
-          await notifyAccount(account.id, {
+          const delivery = await notifyAccount(account.id, {
             title,
             body: alertBody,
             tag: dedupe,
             critical: body.critical !== false,
             url: '/',
-            telegramText: `<b>${title}</b>\n${alertBody}`,
+            telegramText: `${title}\n${alertBody}`,
           });
-          return sendJson(200, { success: true, account: account.id });
+          return sendJson(200, { success: true, account: account.id, accountName: account.name, delivery });
         }
         return sendJson(404, { success: false, error: 'Unknown ingest endpoint' });
       } catch (error) {
