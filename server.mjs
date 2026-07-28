@@ -639,6 +639,10 @@ const requestHandler = (req, res) => {  // CORS Headers
           const trucks = listDownTrucks(isAdmin ? null : authUser.account_id);
           return sendJson(200, { success: true, trucks });
         }
+        // Owners are read-only for the Truck Tracker.
+        if ((req.method === 'POST' || req.method === 'DELETE') && authUser.role === 'owner') {
+          return sendJson(403, { success: false, error: 'Owners cannot modify the truck tracker' });
+        }
         if (req.method === 'POST') {
           const body = await readJsonBody(req);
           if (!body.id) return sendJson(400, { success: false, error: 'id required' });

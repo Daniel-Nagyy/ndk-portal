@@ -4024,14 +4024,17 @@ textarea.table-control {
     display: none;
   }
 }
-/* One responsive table everywhere; it scrolls horizontally on small screens. */
+/* Desktop: scrolling table. Mobile: expandable cards (block id + driver, tap to expand). */
 .recap-table-desktop { display: block; }
-.recap-mobile-cards { display: none !important; }
+.recap-mobile-cards { display: none; }
 .recap-table-desktop .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .vrid-edit { min-width: 120px; font-family: monospace; font-size: 12px; line-height: 1.35; }
+@media (max-width: 768px) {
+  .recap-table-desktop { display: none; }
+  .recap-mobile-cards { display: grid; }
+}
 /* Recap mobile cards – better spacing */
 .recap-mobile-cards {
-  display: grid;
   gap: 16px;                    /* space between cards */
   padding: 4px 0;               /* slight padding top/bottom */
 }
@@ -4080,7 +4083,6 @@ textarea.table-control {
   line-height: 1.4;
 }
 .recap-mobile-cards {
-  display: grid;
   gap: 16px;
   padding: 4px 0;
 }

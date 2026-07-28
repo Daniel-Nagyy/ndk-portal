@@ -2556,6 +2556,7 @@ function renderRecapPage(user) {
         <div class="recap-table-desktop">
           ${renderRecapTable(rows, editable)}
         </div>
+        ${renderRecapMobileCards(rows)}
       </div>
     </div>
   `;
@@ -2641,7 +2642,6 @@ function renderRecapPage(user) {
               <th>VRIDs</th>
               <th>Solo 1 - Solo 2</th>
               <th>Truck</th>
-              <th>DVIR</th>
               <th>Fuel</th>
               <th>On Duty Time</th>
               <th>Requested Start</th>
@@ -2704,19 +2704,14 @@ function renderRecapMobileCards(rows) {
               ${field('VRIDs', (row.vrids && row.vrids.length) ? row.vrids.join(', ') : '–')}
               ${field('Solo', row.solo)}
               ${field('Truck', row.truck)}
-              ${field('DVIR', row.dvir)}
               ${field('Fuel', row.fuel)}
               ${field('On Duty', row.onDuty)}
               ${field('Requested Start', row.requestedStart)}
               ${field('Stop 1 upcoming', row.stopOneupcoming)}
-              ${field('Actual Check‑In', row.actualCheckIn)}
               ${field('Scheduled Final', row.scheduledFinal)}
-              ${field('Final Arrival Home', row.finalArrivalHome)}
-              ${field('Driver Log Off', row.driverLogOff)}
               ${field('HOS Check', row.hosCheck)}
               ${field('Late First Stop', row.lateFirstStop ? 'Yes' : 'No')}
               ${field('Issues', row.issues || 'None')}
-              ${field('Block Deep Dive', row.blockDeepDive || '–')}
             </div>
           </article>
         `;
@@ -2738,7 +2733,6 @@ function renderRecapMobileCards(rows) {
         <td class="vrids">${renderVrids(row, editable)}</td>
         <td>${editable ? renderSelectControl(row, "solo", ["Solo 1", "Solo 2"]) : `<span class="pill blue">${escapeHtml(row.solo)}</span>`}</td>
         <td class="${missing.includes("truck") ? "cell-required" : ""}">${control("truck")}</td>
-        <td>${editable ? renderSelectControl(row, "dvir", ["Not Started", "Pre Trip", "Post Trip", "Completed"]) : `<span class="pill blue">${escapeHtml(row.dvir)}</span>`}</td>
         <td class="${missing.includes("fuel") ? "cell-required" : ""}">${control("fuel")}</td>
         <td class="${missing.includes("onDuty") ? "cell-required" : ""}">${control("onDuty")}</td>
         <td>${control("requestedStart")}</td>
@@ -2956,7 +2950,6 @@ function renderRecapMobileCards(rows) {
       ["VRIDs", (r) => (Array.isArray(r.vrids) ? r.vrids.join(", ") : "")],
       ["Solo", (r) => r.solo],
       ["Truck", (r) => r.truck],
-      ["DVIR", (r) => r.dvir],
       ["Fuel", (r) => r.fuel],
       ["On Duty", (r) => r.onDuty],
       ["Requested Start", (r) => r.requestedStart],
@@ -2984,17 +2977,39 @@ function renderRecapMobileCards(rows) {
       <h1>${esc(title)}</h1>
       <div class="sub">${rows.length} rows · generated ${esc(new Date().toLocaleString())}</div>
       <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
-      <script>window.onload=function(){window.print()}<\/script>
       </body></html>`;
-    const w = window.open("", "_blank");
-    if (!w) { showToast("Allow pop-ups to export/print."); return; }
-    w.document.write(html);
-    w.document.close();
+
+    // Print through a hidden iframe so the user never leaves the app (opening a
+    // new tab on mobile traps them there). The iframe is removed after printing.
+    const frame = document.createElement("iframe");
+    frame.style.position = "fixed";
+    frame.style.right = "0";
+    frame.style.bottom = "0";
+    frame.style.width = "0";
+    frame.style.height = "0";
+    frame.style.border = "0";
+    document.body.appendChild(frame);
+    const cleanup = () => { try { document.body.removeChild(frame); } catch (_) {} };
+    frame.onload = () => {
+      try {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+      } catch (_) {
+        showToast("Could not open the print dialog.");
+      }
+      // Give the print dialog time to grab the content, then remove the iframe.
+      setTimeout(cleanup, 1500);
+    };
+    const doc = frame.contentWindow.document;
+    doc.open();
+    doc.write(html);
+    doc.close();
   }
 
   // ---------- Truck Tracker (down trucks) — DB-backed only ----------
   function canEditTrucks(user) {
-    return user && ["owner", "dispatcher", "manager", "admin", "superadmin"].includes(user.role);
+    // Owners are view-only; dispatchers/managers/admins can add and edit.
+    return user && ["dispatcher", "manager", "admin", "superadmin"].includes(user.role);
   }
 
   function renderTruckTracker(user) {
