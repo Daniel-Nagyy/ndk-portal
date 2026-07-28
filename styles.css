@@ -4555,3 +4555,34 @@ textarea.table-control {
     font-size: 0.72rem;
   }
 }
+/* ============================================================
+   Mobile safety net (<=768px): stop horizontal overflow, stack
+   two/three-column grids, let toolbars wrap. Keeps desktop intact.
+   ============================================================ */
+@media (max-width: 768px) {
+  html, body { max-width: 100%; overflow-x: hidden; }
+
+  .grid-2,
+  .grid-3 { grid-template-columns: 1fr !important; }
+
+  /* Section headers and action rows should wrap, not overflow. */
+  .section-title,
+  .actions-row,
+  .recap-toolbar,
+  .panel-header { flex-wrap: wrap; gap: 10px; }
+  .actions-row { width: 100%; }
+
+  /* Tabs and toolbars scroll instead of pushing the page wide. */
+  .tabs { flex-wrap: wrap; }
+
+  /* Any wide table scrolls within its own container. */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+  table { min-width: max-content; }
+
+  /* Forms go full width. */
+  .form-card, .panel { width: 100%; }
+  .form-grid { grid-template-columns: 1fr !important; }
+
+  /* Prevent oversized fixed-width inputs from bursting the layout. */
+  input, select, textarea { max-width: 100%; }
+}

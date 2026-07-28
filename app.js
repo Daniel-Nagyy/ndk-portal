@@ -1151,7 +1151,6 @@ function renderTopbar(user) {
         { id: "owner-overview", label: "Owner Overview", icon: "owner-overview" },
         { id: "owner-recap", label: "Daily Recap", icon: "recap" },
         { id: 'netradyne-dashboard', label: 'Netradyne Alerts', icon: 'netradyne-dashboard' },
-        { id: "owner-issues", label: "Issues", icon: "owner-issues" },
         ...shared,
       ];
     }
@@ -1898,11 +1897,6 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
             <strong class="kpi-value">${metrics.activeTrips}</strong>
             <span class="kpi-label">Active Trips</span>
           </button>
-          <button class="kpi-card kpi-card--issues" type="button" data-view="owner-issues" aria-label="View open issues">
-            <span class="kpi-icon">📋</span>
-            <strong class="kpi-value ${metrics.openIssues > 0 ? 'kpi-amber' : 'kpi-green'}">${metrics.openIssues}</strong>
-            <span class="kpi-label">Open Issues</span>
-          </button>
           <button class="kpi-card kpi-card--netradyne" type="button" data-view="netradyne-dashboard" aria-label="View Netradyne alerts">
             <span class="kpi-icon">🔔</span>
             <strong class="kpi-value">${netradyneAlerts.length}</strong>
@@ -1923,21 +1917,6 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
             <span class="status-pill-badge ${riskDrivers.length ? 'badge-red' : 'badge-green'}">${riskDrivers.length ? `${riskDrivers.length} at risk` : '✓ Clear'}</span>
           </div>
           ${renderHosRiskCards(riskDrivers.slice(0, 3))}
-        </section>
-
-        <!-- LATE ITEMS -->
-        <section class="mobile-section">
-          <div class="mobile-section-head">
-            <div class="section-head-text">
-              <div class="section-head-icon late-icon">📦</div>
-              <div>
-                <h3>Amazon Relay Late Drivers</h3>
-                <p>Drivers who are running late.</p>
-              </div>
-            </div>
-            <span class="status-pill-badge ${(state.lateItems && state.lateItems.length) ? 'badge-amber' : 'badge-green'}">${(state.lateItems && state.lateItems.length) ? `${state.lateItems.length} late` : '✓ Clear'}</span>
-          </div>
-          ${renderLateItemsCards(state.lateItems || [])}
         </section>
 
         <!-- DAILY RECAP -->
@@ -3600,6 +3579,25 @@ function renderRecapMobileCards(rows) {
             ${user.role === "admin" ? `<div class="inline-form-actions"><button class="btn btn-danger" type="button" data-action="reset-demo">Reset demo data</button></div>` : ""}
           </div>
         </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Notifications</h3>
+              <p>Get alerts on this device for your account (HOS, Netradyne, bobtail, arrivals).</p>
+            </div>
+            <span class="pill ${notificationPermission() === "granted" ? "green" : "amber"}">${ownerNotificationShortLabel()}</span>
+          </div>
+          <div class="panel-body">
+            <div class="inline-form-actions" style="flex-wrap:wrap;gap:8px">
+              <button class="btn btn-primary" type="button" data-action="enable-notifications" ${notificationPermission() === "granted" ? "disabled" : ""}>
+                ${notificationPermission() === "granted" ? "Notifications enabled" : "Enable phone notifications"}
+              </button>
+              <button class="btn btn-secondary" type="button" data-action="install-app">Install app</button>
+            </div>
+            <p class="muted compact" style="margin-top:8px">Tip: on iPhone, add this site to your Home Screen first, then open it and enable notifications.</p>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -3656,6 +3654,20 @@ function renderRecapMobileCards(rows) {
     hosNotified = {};
     saveHosNotificationMemory();
     await queueOwnerHosNotifications(user, true);
+    render();
+  }
+
+  // Push notifications for ANY role (owner, dispatcher, manager, admin). Ties the
+  // device's subscription to the logged-in user's account (account-scoped alerts).
+  async function enableNotifications(user) {
+    if (!user) return;
+    if (!("Notification" in window)) { showToast("This browser does not support notifications."); return; }
+    const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (permission !== "granted") { showToast("Notifications were not enabled."); render(); return; }
+    const pushResult = await subscribeToPush();
+    if (pushResult.ok) showToast("Push alerts enabled for your account.");
+    else if (pushResult.reason === "server_not_configured") showToast("Enabled here, but push isn't configured on the server yet.");
+    else showToast("Enabled, but background push isn't available on this device/browser.");
     render();
   }
 
@@ -3978,6 +3990,12 @@ case "hos-close-filters":
         break;
       case "enable-owner-notifications":
         enableOwnerNotifications(user);
+        break;
+      case "enable-notifications":
+        await enableNotifications(user);
+        break;
+      case "install-app":
+        await installOwnerApp();
         break;
       case "install-owner-app":
         installOwnerApp();
