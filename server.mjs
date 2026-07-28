@@ -10,7 +10,7 @@ import { getAuthenticatedContext } from './netradyne/auth.js';
 import { pushConfigured, getVapidPublicKey, removeSubscription, subscriptionCount } from './push.mjs';
 import {
   bootstrap, getUserByEmail, verifyPassword, createSession, deleteSession,
-  publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount, updateAccount,
+  publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount, updateAccount, deleteAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
   getRecaps, syncRecaps, getAccountByApiKey, regenerateApiKey
@@ -274,6 +274,22 @@ const requestHandler = (req, res) => {  // CORS Headers
         // updateAccount only changes provided keys; blank passwords are left untouched.
         const acct = updateAccount(body.id, body);
         sendJson(200, { success: true, account: dbPublicAccount(acct) });
+      } catch (error) {
+        sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
+  if (req.url === '/api/admin/accounts' && req.method === 'DELETE') {
+    (async () => {
+      try {
+        const user = getAuthUser(req);
+        if (!user || user.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+        const body = await readJsonBody(req);
+        if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+        const result = deleteAccount(body.id);
+        sendJson(200, { success: true, ...result });
       } catch (error) {
         sendJson(500, { success: false, error: simplifyError(error) });
       }

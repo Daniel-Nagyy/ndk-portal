@@ -3219,6 +3219,9 @@ function renderRecapMobileCards(rows) {
                           data-copy-key="${escapeHtml(client.apiKey || "")}">Copy key</button>
                         <button type="button" class="btn btn-secondary"
                           data-edit-account="${escapeHtml(client.id)}">Edit</button>
+                        <button type="button" class="btn btn-danger"
+                          data-delete-account="${escapeHtml(client.id)}"
+                          data-account-name="${escapeHtml(client.name)}">Delete</button>
                       </div>
                     </div>
                   `
@@ -3695,6 +3698,29 @@ if (document.visibilityState === 'visible') {
     if (event.target.closest("[data-cancel-edit]")) {
       editingAccountId = null;
       render();
+      return;
+    }
+    const deleteAccountBtn = event.target.closest("[data-delete-account]");
+    if (deleteAccountBtn) {
+      const id = deleteAccountBtn.getAttribute("data-delete-account");
+      const name = deleteAccountBtn.getAttribute("data-account-name") || id;
+      if (!window.confirm(`Delete account "${name}"? This removes its users, logins, and push subscriptions. This cannot be undone.`)) return;
+      try {
+        const res = await fetch("/api/admin/accounts", {
+          method: "DELETE",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        const out = await res.json();
+        if (!out.success) return showToast(out.error || "Could not delete account.");
+        if (editingAccountId === id) editingAccountId = null;
+        await loadAccountsAndUsers();
+        render();
+        showToast(`Account "${name}" deleted.`);
+      } catch (_) {
+        showToast("Network error deleting account.");
+      }
       return;
     }
     // Dismiss push banner

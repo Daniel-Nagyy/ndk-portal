@@ -157,6 +157,19 @@ export function listAccounts() {
   return db.prepare("SELECT * FROM accounts ORDER BY name").all();
 }
 
+// Delete an account and everything tied to it (users, their sessions, push subs).
+export const deleteAccount = db.transaction((id) => {
+  const acct = getAccount(id);
+  if (!acct) throw new Error(`Unknown account: ${id}`);
+  const users = db.prepare("SELECT id FROM users WHERE account_id = ?").all(id);
+  for (const u of users) db.prepare("DELETE FROM sessions WHERE user_id = ?").run(u.id);
+  db.prepare("DELETE FROM push_subscriptions WHERE account_id = ?").run(id);
+  for (const u of users) db.prepare("DELETE FROM push_subscriptions WHERE user_id = ?").run(u.id);
+  db.prepare("DELETE FROM users WHERE account_id = ?").run(id);
+  db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+  return { id, deletedUsers: users.length };
+});
+
 // Decrypted credentials for the pollers (never send to the client).
 export function getAccountCredentials(id) {
   const a = getAccount(id);
