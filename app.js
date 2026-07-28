@@ -15,6 +15,7 @@
     'owner-overview': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
     'netradyne-dashboard': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
     'owner-issues': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    'truck-tracker': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',
     'my-shifts': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
     takeover: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
   };
@@ -41,6 +42,7 @@
   let currentView = defaultView(getCurrentUser());
   let recapFilter = "all";
   let editingAccountId = null; // when set, the Accounts form edits this account instead of creating
+  let downTrucks = []; // Truck Tracker rows — DB-backed only, never persisted to localStorage
   let netradyneAlerts = [];
   let netradyneSearchText = '';
 let netradyneSortColumn = 'occurredAt'; // default sort by date newest first
@@ -530,6 +532,16 @@ pollNetradyneAlerts();
     }
   }
 
+  async function loadDownTrucks() {
+    try {
+      const res = await fetch("/api/down-trucks", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success) downTrucks = Array.isArray(data.trucks) ? data.trucks : [];
+    } catch (e) {
+      console.warn("Failed to load down trucks:", e);
+    }
+  }
+
   let syncRecapsTimer = null;
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -663,6 +675,7 @@ pollNetradyneAlerts();
         render();
         await loadAccountsAndUsers();
         await loadRecaps();
+        await loadDownTrucks();
         render();
         if (appUser.role === "owner") fetchGeotabDriversReadiness();
       } else {
@@ -1148,10 +1161,9 @@ function renderTopbar(user) {
       return [
         { id: "owner-mobile", label: "Home", icon: "owner-mobile" },
         { id: "owner-hos", label: "HOS Risks", icon: "owner-hos" },
-        { id: "owner-overview", label: "Owner Overview", icon: "owner-overview" },
         { id: "owner-recap", label: "Daily Recap", icon: "recap" },
         { id: 'netradyne-dashboard', label: 'Netradyne Alerts', icon: 'netradyne-dashboard' },
-        ...shared,
+        { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       ];
     }
     return [
@@ -1159,6 +1171,7 @@ function renderTopbar(user) {
       { id: "owner-hos", label: "HOS Risks", icon: "owner-hos" },
       { id: "netradyne-dashboard", label: "Netradyne Alerts", icon: "netradyne-dashboard" },
       { id: "dispatcher-recap", label: "Daily Recap", icon: "recap" },
+      { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       { id: "takeover", label: "Takeover Board", icon: "takeover" },
       { id: "announcements", label: "Announcements", icon: "announcements" },
       ...shared,
@@ -1191,6 +1204,7 @@ function renderTopbar(user) {
     if (currentView === "owner-overview") return renderOwnerOverview(user);
     if (currentView === "owner-team") return renderOwnerTeam(user);
     if (currentView === "owner-issues") return renderOwnerIssues(user);
+    if (currentView === "truck-tracker") return renderTruckTracker(user);
     if (currentView === "settings") return renderSettings(user);
     return renderAdminDashboard(user);
   }
@@ -1902,6 +1916,11 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
             <strong class="kpi-value">${netradyneAlerts.length}</strong>
             <span class="kpi-label">Safety Alerts</span>
           </button>
+          <button class="kpi-card kpi-card--trucks" type="button" data-view="truck-tracker" aria-label="View down trucks">
+            <span class="kpi-icon">🔧</span>
+            <strong class="kpi-value ${downTrucks.length > 0 ? 'kpi-amber' : 'kpi-green'}">${downTrucks.length}</strong>
+            <span class="kpi-label">Down Trucks</span>
+          </button>
         </div>
 
         <!-- HOS RISK BOARD -->
@@ -1918,24 +1937,6 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
           </div>
           ${renderHosRiskCards(riskDrivers.slice(0, 3))}
         </section>
-
-        <!-- DAILY RECAP -->
-        <section class="mobile-section">
-          <div class="mobile-section-head">
-            <div class="section-head-text">
-              <div class="section-head-icon recap-icon">📅</div>
-              <div>
-                <h3>Daily Recap</h3>
-                <p>${escapeHtml(formatDateLabel(selectedRecapDate))} &mdash; ${day.rowCount} rows</p>
-              </div>
-            </div>
-            <button class="mobile-section-btn" type="button" data-view="owner-recap">Open full ›</button>
-          </div>
-          ${renderRecapDayControls(user, false)}
-          ${renderMobileRecapCards(rows.slice(0, 5))}
-        </section>
-
-      
 
       </div>
     `;
@@ -2991,6 +2992,121 @@ function renderRecapMobileCards(rows) {
     w.document.close();
   }
 
+  // ---------- Truck Tracker (down trucks) — DB-backed only ----------
+  function canEditTrucks(user) {
+    return user && ["owner", "dispatcher", "manager", "admin", "superadmin"].includes(user.role);
+  }
+
+  function renderTruckTracker(user) {
+    const editable = canEditTrucks(user);
+    const trucks = downTrucks;
+    const rowsHtml = trucks.length
+      ? trucks.map((t, i) => renderTruckRow(t, i + 1, editable)).join("")
+      : `<tr><td colspan="6" class="empty-state">No down trucks. ${editable ? 'Click "+ Add truck" to log one.' : ""}</td></tr>`;
+    return `
+      <div class="section-title">
+        <div>
+          <h2>Truck Tracker</h2>
+          <p>Down trucks with their issue, date, and work order (WO) number. Saved to the database.</p>
+        </div>
+        <div class="actions-row">
+          ${editable ? `<button class="btn btn-primary" type="button" data-action="truck-add-row">+ Add truck</button>` : ""}
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Down trucks</h3>
+            <p>${trucks.length} logged.</p>
+          </div>
+          <span class="pill ${trucks.length ? "amber" : "green"}">${trucks.length ? `${trucks.length} down` : "All up"}</span>
+        </div>
+        <div class="panel-body">
+          <div class="table-wrap">
+            <table class="recap-table">
+              <thead>
+                <tr>
+                  <th class="row-number">#</th>
+                  <th>Truck Number</th>
+                  <th>Issue</th>
+                  <th>Date</th>
+                  <th>WO Number</th>
+                  <th>Status</th>
+                  ${editable ? "<th>Actions</th>" : ""}
+                </tr>
+              </thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTruckRow(t, index, editable) {
+    const inp = (field, type = "text") =>
+      editable
+        ? `<input class="table-control" type="${type}" value="${escapeHtml(t[field] || "")}" data-truck-field="${field}" data-truck-id="${t.id}" />`
+        : `<span>${escapeHtml(t[field] || "-")}</span>`;
+    const statusCtl = editable
+      ? `<select class="table-control" data-truck-field="status" data-truck-id="${t.id}">
+           ${["Down", "In Shop", "Waiting Parts", "Repaired"].map((s) => `<option value="${s}" ${t.status === s ? "selected" : ""}>${s}</option>`).join("")}
+         </select>`
+      : `<span class="pill ${t.status === "Repaired" ? "green" : "amber"}">${escapeHtml(t.status || "Down")}</span>`;
+    return `
+      <tr>
+        <td class="row-number">${index}</td>
+        <td class="id-cell">${inp("truckNumber")}</td>
+        <td>${editable ? `<textarea class="table-control" data-truck-field="issue" data-truck-id="${t.id}">${escapeHtml(t.issue || "")}</textarea>` : `<span>${escapeHtml(t.issue || "-")}</span>`}</td>
+        <td>${inp("downDate", "date")}</td>
+        <td class="id-cell">${inp("woNumber")}</td>
+        <td>${statusCtl}</td>
+        ${editable ? `<td><button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">Delete</button></td>` : ""}
+      </tr>
+    `;
+  }
+
+  function saveDownTruck(t) {
+    fetch("/api/down-trucks", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(t),
+    }).catch(() => {});
+  }
+
+  async function addDownTruck(user) {
+    const t = {
+      id: `dt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      truckNumber: "", issue: "", woNumber: "", downDate: todayISO(), status: "Down",
+    };
+    downTrucks.unshift(t);
+    render();
+    try {
+      await fetch("/api/down-trucks", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(t),
+      });
+    } catch (_) {}
+    showToast("Truck added.");
+  }
+
+  async function deleteDownTruckRow(id) {
+    const t = downTrucks.find((x) => x.id === id);
+    if (!t) return;
+    if (!window.confirm(`Delete truck ${t.truckNumber || "row"}? This cannot be undone.`)) return;
+    downTrucks = downTrucks.filter((x) => x.id !== id);
+    render();
+    try {
+      await fetch("/api/down-trucks", {
+        method: "DELETE", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      });
+    } catch (_) {}
+    showToast("Truck deleted.");
+  }
+
   function renderShiftsPage(user) {
     const shifts = visibleShifts(user);
     const canEdit = user.role === "admin";
@@ -3985,6 +4101,12 @@ case "hos-close-filters":
       case "recap-print":
         exportRecapPrintable(user);
         break;
+      case "truck-add-row":
+        await addDownTruck(user);
+        break;
+      case "truck-delete-row":
+        await deleteDownTruckRow(action.dataset.truckId);
+        break;
       case "focus-create-shift":
         document.getElementById("create-shift")?.scrollIntoView({ behavior: "smooth", block: "center" });
         break;
@@ -4070,6 +4192,15 @@ case "hos-close-filters":
       } finally {
         importInput.value = "";
       }
+      return;
+    }
+
+    const truckField = event.target.closest("[data-truck-field]");
+    if (truckField) {
+      const t = downTrucks.find((x) => x.id === truckField.dataset.truckId);
+      if (!t) return;
+      t[truckField.dataset.truckField] = truckField.value;
+      saveDownTruck(t); // persist to DB; no re-render so the cursor stays put
       return;
     }
 
@@ -4192,6 +4323,10 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       const appUser = applyServerUser(data.user, data.account);
       session = { userId: appUser.id };
       currentView = defaultView(appUser);
+      render();
+      await loadAccountsAndUsers();
+      await loadRecaps();
+      await loadDownTrucks();
       render();
       if (appUser.role === "owner") fetchGeotabDriversReadiness();
       showToast(`Welcome, ${appUser.name}.`);

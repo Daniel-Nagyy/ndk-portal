@@ -4586,3 +4586,16 @@ textarea.table-control {
   /* Prevent oversized fixed-width inputs from bursting the layout. */
   input, select, textarea { max-width: 100%; }
 }
+
+/* HOS page: keep everything within the viewport on phones so the browser
+   never zooms out to fit an overflowing element. */
+@media (max-width: 768px) {
+  .hos-page,
+  .hos-status-banner,
+  .hos-summary-grid,
+  .hos-controls-bar,
+  .hos-mobile-cards { max-width: 100%; }
+  .hos-table-scroll { overflow-x: auto; max-width: 100%; }
+  .hos-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .hos-mobile-cards .hos-metric { min-width: 0; }
+}

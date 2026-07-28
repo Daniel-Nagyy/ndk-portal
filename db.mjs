@@ -67,6 +67,18 @@ CREATE TABLE IF NOT EXISTS recaps (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS down_trucks (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  truck_number TEXT,
+  issue TEXT,
+  wo_number TEXT,
+  down_date TEXT,
+  status TEXT DEFAULT 'Down',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
 `);
 
 // --- lightweight migrations: add columns to existing DBs if missing ---
@@ -353,6 +365,47 @@ export function getRecaps(accountId = null) {
   }
   const rows = db.prepare("SELECT * FROM recaps").all();
   return rows.map(r => JSON.parse(r.payload));
+}
+
+// ---------- Down trucks (Truck Tracker) ----------
+function rowToDownTruck(r) {
+  return {
+    id: r.id, accountId: r.account_id, truckNumber: r.truck_number || "",
+    issue: r.issue || "", woNumber: r.wo_number || "", downDate: r.down_date || "",
+    status: r.status || "Down", updatedAt: r.updated_at,
+  };
+}
+
+export function listDownTrucks(accountId = null) {
+  const rows = accountId
+    ? db.prepare("SELECT * FROM down_trucks WHERE account_id = ? ORDER BY down_date DESC, created_at DESC").all(accountId)
+    : db.prepare("SELECT * FROM down_trucks ORDER BY down_date DESC, created_at DESC").all();
+  return rows.map(rowToDownTruck);
+}
+
+export function getDownTruckById(id) {
+  const r = db.prepare("SELECT * FROM down_trucks WHERE id = ?").get(id);
+  return r ? rowToDownTruck(r) : null;
+}
+
+export function upsertDownTruck(t) {
+  db.prepare(`
+    INSERT INTO down_trucks (id, account_id, truck_number, issue, wo_number, down_date, status, updated_at)
+    VALUES (@id, @account_id, @truck_number, @issue, @wo_number, @down_date, @status, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      account_id = excluded.account_id, truck_number = excluded.truck_number,
+      issue = excluded.issue, wo_number = excluded.wo_number, down_date = excluded.down_date,
+      status = excluded.status, updated_at = datetime('now')
+  `).run({
+    id: t.id, account_id: t.accountId, truck_number: t.truckNumber || "",
+    issue: t.issue || "", wo_number: t.woNumber || "", down_date: t.downDate || "",
+    status: t.status || "Down",
+  });
+  return getDownTruckById(t.id);
+}
+
+export function deleteDownTruck(id) {
+  return db.prepare("DELETE FROM down_trucks WHERE id = ?").run(id).changes;
 }
 
 export function getRecapById(id) {

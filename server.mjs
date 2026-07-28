@@ -13,7 +13,9 @@ import {
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount, updateAccount, deleteAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
-  getRecaps, syncRecaps, getRecapById, deleteRecap, getAccountByApiKey, regenerateApiKey
+  getRecaps, syncRecaps, getRecapById, deleteRecap,
+  listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
+  getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus } from './ingest-store.mjs';
 
@@ -620,6 +622,50 @@ const requestHandler = (req, res) => {  // CORS Headers
         console.error("Recaps sync error:", e);
         res.writeHead(500);
         res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    })();
+    return;
+  }
+
+  // ---------- Truck Tracker (down trucks) — DB-backed, account-scoped ----------
+  if (url.pathname === '/api/down-trucks') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+
+        if (req.method === 'GET') {
+          const trucks = listDownTrucks(isAdmin ? null : authUser.account_id);
+          return sendJson(200, { success: true, trucks });
+        }
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req);
+          if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+          // Non-admins can only write to their own account.
+          const accountId = isAdmin ? (body.accountId || authUser.account_id) : authUser.account_id;
+          if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+          const saved = upsertDownTruck({
+            id: body.id, accountId,
+            truckNumber: body.truckNumber, issue: body.issue,
+            woNumber: body.woNumber, downDate: body.downDate, status: body.status,
+          });
+          return sendJson(200, { success: true, truck: saved });
+        }
+        if (req.method === 'DELETE') {
+          const body = await readJsonBody(req);
+          if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+          if (!isAdmin) {
+            const existing = getDownTruckById(body.id);
+            if (existing && existing.accountId !== authUser.account_id) {
+              return sendJson(403, { success: false, error: 'Forbidden' });
+            }
+          }
+          return sendJson(200, { success: true, deleted: deleteDownTruck(body.id) });
+        }
+        return sendJson(405, { success: false, error: 'Method not allowed' });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
       }
     })();
     return;
