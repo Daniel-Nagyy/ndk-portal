@@ -4603,12 +4603,31 @@ textarea.table-control {
 }
 
 /* ---- Truck Tracker: compact table + mobile cards ---- */
+/* Override the recap table's huge 2200px min-width so columns fit the panel. */
+.truck-table.recap-table {
+  min-width: 0 !important;
+  width: 100%;
+  table-layout: fixed;
+}
 .truck-table.recap-table th,
-.truck-table.recap-table td { padding: 4px 6px; font-size: 12px; }
-.truck-table .table-control { padding: 3px 6px; font-size: 12px; min-width: 0; }
-.truck-table td.id-cell { max-width: 110px; }
-.truck-table td:nth-child(3) { min-width: 160px; } /* issue */
-.truck-table textarea.table-control { min-height: 30px; resize: vertical; }
+.truck-table.recap-table td {
+  padding: 6px 8px;
+  font-size: 13px;
+  white-space: normal;
+  overflow: hidden;
+}
+/* Fixed, sensible column widths: #, Truck #, Issue (flex), Date, WO #, Status, ✕ */
+.truck-table col.c-num,    .truck-table th:nth-child(1) { width: 34px; }
+.truck-table th:nth-child(2) { width: 110px; }   /* Truck # */
+.truck-table th:nth-child(3) { width: auto; }    /* Issue takes remaining space */
+.truck-table th:nth-child(4) { width: 130px; }   /* Date */
+.truck-table th:nth-child(5) { width: 110px; }   /* WO # */
+.truck-table th:nth-child(6) { width: 120px; }   /* Status */
+.truck-table th:nth-child(7) { width: 44px; }    /* delete */
+.truck-table .table-control { width: 100%; padding: 5px 8px; font-size: 13px; min-width: 0; box-sizing: border-box; }
+.truck-table textarea.table-control { min-height: 34px; resize: vertical; }
+/* This table should never scroll sideways on desktop. */
+.truck-table-desktop .table-wrap { overflow-x: hidden; }
 
 /* Show table on desktop, cards on mobile. */
 .truck-table-desktop { display: block; }
