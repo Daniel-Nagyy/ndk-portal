@@ -60,13 +60,15 @@ export async function sendTelegramToAccount(accountId, text) {
 }
 
 // Send an alert to an account through both channels.
-export async function notifyAccount(accountId, { title, body, tag, requireInteraction = false, critical = false, url = "/index.html", telegramText }) {
-  const [push, tg] = await Promise.allSettled([
-    sendPushToAccount(accountId, { title, body, tag, requireInteraction: requireInteraction || critical, critical, url }),
+export async function notifyAccount(accountId, { title, body, tag, requireInteraction = false, critical = false, url = "/index.html", telegramText, push = true }) {
+  const [pushRes, tg] = await Promise.allSettled([
+    push
+      ? sendPushToAccount(accountId, { title, body, tag, requireInteraction: requireInteraction || critical, critical, url })
+      : Promise.resolve({ sent: 0, skipped: "push_disabled" }),
     sendTelegramToAccount(accountId, telegramText || `${title}\n${body}`),
   ]);
   return {
-    push: push.status === "fulfilled" ? push.value : { error: String(push.reason) },
+    push: pushRes.status === "fulfilled" ? pushRes.value : { error: String(pushRes.reason) },
     telegram: tg.status === "fulfilled" ? tg.value : { error: String(tg.reason) },
   };
 }

@@ -4601,3 +4601,50 @@ textarea.table-control {
   .hos-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   .hos-mobile-cards .hos-metric { min-width: 0; }
 }
+
+/* ---- Truck Tracker: compact table + mobile cards ---- */
+.truck-table.recap-table th,
+.truck-table.recap-table td { padding: 4px 6px; font-size: 12px; }
+.truck-table .table-control { padding: 3px 6px; font-size: 12px; min-width: 0; }
+.truck-table td.id-cell { max-width: 110px; }
+.truck-table td:nth-child(3) { min-width: 160px; } /* issue */
+.truck-table textarea.table-control { min-height: 30px; resize: vertical; }
+
+/* Show table on desktop, cards on mobile. */
+.truck-table-desktop { display: block; }
+.truck-mobile-cards { display: none; }
+@media (max-width: 768px) {
+  .truck-table-desktop { display: none; }
+  .truck-mobile-cards { display: grid; gap: 12px; }
+}
+.truck-card {
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px; padding: 12px; background: rgba(255,255,255,0.03);
+  display: grid; gap: 8px;
+}
+.truck-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.truck-card-field { display: flex; flex-direction: column; gap: 3px; }
+.truck-card-field > span { font-size: 0.7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.truck-card-field .table-control { width: 100%; }
+
+/* ============================================================
+   HOS mobile cards: force everything to fit the screen — no
+   sideways scroll, readiness pill stays visible, metrics shrink.
+   ============================================================ */
+@media (max-width: 1023px) {
+  .hos-table-wrapper,
+  .hos-table-scroll { overflow-x: hidden !important; max-width: 100%; }
+  .hos-mobile-cards { width: 100%; max-width: 100%; padding: 0; box-sizing: border-box; }
+  .hos-mobile-card {
+    width: 100%; max-width: 100%; box-sizing: border-box; margin: 0;
+  }
+  .hos-mobile-card * { min-width: 0; }
+  /* Header: name wraps, readiness pill never gets pushed off. */
+  .hos-mobile-card-header { align-items: flex-start; gap: 8px; flex-wrap: nowrap; }
+  .hos-mobile-card-identity { flex: 1 1 auto; min-width: 0; }
+  .hos-mobile-card-identity .driver-name { white-space: normal; overflow-wrap: anywhere; }
+  .hos-mobile-card-header > *:last-child { flex: 0 0 auto; }
+  /* Metrics: exactly two equal, shrinkable columns. */
+  .hos-mobile-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px; }
+  .hos-mobile-metrics .hos-metric { min-width: 0 !important; }
+}

@@ -43,6 +43,7 @@
   let recapFilter = "all";
   let editingAccountId = null; // when set, the Accounts form edits this account instead of creating
   let downTrucks = []; // Truck Tracker rows — DB-backed only, never persisted to localStorage
+  let truckStatusFilter = "all";
   let netradyneAlerts = [];
   let netradyneSearchText = '';
 let netradyneSortColumn = 'occurredAt'; // default sort by date newest first
@@ -979,6 +980,10 @@ function renderNetradyneDashboard(user) {
       });
     });
 
+    // Keep focus/caret in the search box (it's not inside a data-form).
+    const searchFocused = activeEl && activeEl.getAttribute && activeEl.getAttribute("data-search") !== null && activeEl.hasAttribute("data-search");
+    const searchSel = searchFocused ? [activeEl.selectionStart, activeEl.selectionEnd] : null;
+
     if (!isAllowedView(user, currentView)) {
       currentView = defaultView(user);
     }
@@ -1001,6 +1006,10 @@ function renderNetradyneDashboard(user) {
       const el = document.querySelector(`form[data-form="${form}"] [name="${name}"]`);
       if (el && el.value !== value) el.value = value;
     });
+    if (searchFocused) {
+      const el = document.querySelector("[data-search]");
+      if (el) { el.focus(); try { el.setSelectionRange(searchSel[0], searchSel[1]); } catch (_) {} }
+    }
     if (focusInfo) {
       const el = document.querySelector(`form[data-form="${focusInfo.form}"] [name="${focusInfo.name}"]`);
       if (el) {
@@ -1219,7 +1228,7 @@ function renderTopbar(user) {
     if (recapFilter === "open") {
       rows = rows.filter((row) => row.status !== "Completed");
     }
-    return applySearch(rows, ["driverAssigned", "tripId", "blockId", "truck", "issues"]);
+    return applySearch(rows, ["driverAssigned", "tripId", "blockId", "truck", "issues", "vrids"]);
   }
 
   function visibleShifts(user) {
@@ -2528,7 +2537,6 @@ function renderRecapPage(user) {
       <div class="actions-row">
         ${renderRecapTabs(user)}
         <button class="btn btn-secondary" type="button" data-action="recap-print">Export / Print</button>
-        ${editable ? `<button class="btn btn-secondary" type="button" data-action="mark-complete-visible">Complete clean rows</button>` : ""}
       </div>
     </div>
 
@@ -2575,6 +2583,10 @@ function renderRecapPage(user) {
           <input class="table-control date-select" type="date" data-recap-date-picker value="${escapeHtml(selectedRecapDate)}" />
         </label>
         <button class="btn btn-secondary btn-small" type="button" data-action="recap-today">Today</button>
+        <label class="field compact-field" style="flex:1;min-width:160px">
+          <span class="field-label">🔎 Search</span>
+          <input class="table-control" type="search" data-search placeholder="Driver, trip, block, VRID…" value="${escapeHtml(searchText)}" />
+        </label>
         ${dates.length ? `
         <label class="field compact-field">
           <span class="field-label">Days with data</span>
@@ -2598,8 +2610,8 @@ function renderRecapPage(user) {
   }
 
   function renderRecapTabs(user) {
-    // Owners get a clean recap with no filter tabs.
-    if (user.role === "owner") return "";
+    // Owners and dispatchers get a clean recap with no filter tabs.
+    if (user.role === "owner" || user.role === "dispatcher") return "";
     const tabs = [
       ["all", "All"],
       ["open", "Open"],
@@ -3007,48 +3019,68 @@ function renderRecapMobileCards(rows) {
     return user && ["dispatcher", "manager", "admin", "superadmin"].includes(user.role);
   }
 
+  function visibleTrucks() {
+    let rows = downTrucks;
+    if (truckStatusFilter !== "all") rows = rows.filter((t) => (t.status || "Down") === truckStatusFilter);
+    return applySearch(rows, ["truckNumber", "issue", "woNumber", "status"]);
+  }
+
   function renderTruckTracker(user) {
     const editable = canEditTrucks(user);
-    const trucks = downTrucks;
+    const trucks = visibleTrucks();
+    const statuses = ["all", "Down", "In Shop", "Waiting Parts", "Repaired"];
     const rowsHtml = trucks.length
       ? trucks.map((t, i) => renderTruckRow(t, i + 1, editable)).join("")
-      : `<tr><td colspan="6" class="empty-state">No down trucks. ${editable ? 'Click "+ Add truck" to log one.' : ""}</td></tr>`;
+      : `<tr><td colspan="${editable ? 7 : 6}" class="empty-state">No trucks match. ${editable ? 'Click "+ Add truck" to log one.' : ""}</td></tr>`;
     return `
       <div class="section-title">
         <div>
           <h2>Truck Tracker</h2>
-          <p>Down trucks with their issue, date, and work order (WO) number. Saved to the database.</p>
+          <p>Down trucks: issue, date, and work order (WO).</p>
         </div>
         <div class="actions-row">
           ${editable ? `<button class="btn btn-primary" type="button" data-action="truck-add-row">+ Add truck</button>` : ""}
         </div>
       </div>
 
+      <div class="recap-toolbar">
+        <label class="field compact-field" style="flex:1;min-width:150px">
+          <span class="field-label">🔎 Search</span>
+          <input class="table-control" type="search" data-search placeholder="Truck #, issue, WO…" value="${escapeHtml(searchText)}" />
+        </label>
+        <label class="field compact-field">
+          <span class="field-label">Filter status</span>
+          <select class="table-control" data-truck-filter>
+            ${statuses.map((s) => `<option value="${s}" ${truckStatusFilter === s ? "selected" : ""}>${s === "all" ? "All" : s}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+
       <div class="panel">
         <div class="panel-header">
-          <div>
-            <h3>Down trucks</h3>
-            <p>${trucks.length} logged.</p>
-          </div>
-          <span class="pill ${trucks.length ? "amber" : "green"}">${trucks.length ? `${trucks.length} down` : "All up"}</span>
+          <div><h3>Down trucks</h3><p>${trucks.length} shown of ${downTrucks.length}.</p></div>
+          <span class="pill ${downTrucks.length ? "amber" : "green"}">${downTrucks.length ? `${downTrucks.length} down` : "All up"}</span>
         </div>
         <div class="panel-body">
-          <div class="table-wrap">
-            <table class="recap-table">
-              <thead>
-                <tr>
-                  <th class="row-number">#</th>
-                  <th>Truck Number</th>
-                  <th>Issue</th>
-                  <th>Date</th>
-                  <th>WO Number</th>
-                  <th>Status</th>
-                  ${editable ? "<th>Actions</th>" : ""}
-                </tr>
-              </thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
+          <div class="truck-table-desktop">
+            <div class="table-wrap">
+              <table class="recap-table truck-table">
+                <thead>
+                  <tr>
+                    <th class="row-number">#</th>
+                    <th>Truck #</th>
+                    <th>Issue</th>
+                    <th>Date</th>
+                    <th>WO #</th>
+                    <th>Status</th>
+                    ${editable ? "<th></th>" : ""}
+                  </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+              </table>
+            </div>
           </div>
+          ${renderTruckCards(trucks, editable)}
         </div>
       </div>
     `;
@@ -3068,12 +3100,41 @@ function renderRecapMobileCards(rows) {
       <tr>
         <td class="row-number">${index}</td>
         <td class="id-cell">${inp("truckNumber")}</td>
-        <td>${editable ? `<textarea class="table-control" data-truck-field="issue" data-truck-id="${t.id}">${escapeHtml(t.issue || "")}</textarea>` : `<span>${escapeHtml(t.issue || "-")}</span>`}</td>
+        <td>${editable ? `<textarea class="table-control" rows="1" data-truck-field="issue" data-truck-id="${t.id}">${escapeHtml(t.issue || "")}</textarea>` : `<span>${escapeHtml(t.issue || "-")}</span>`}</td>
         <td>${inp("downDate", "date")}</td>
         <td class="id-cell">${inp("woNumber")}</td>
         <td>${statusCtl}</td>
-        ${editable ? `<td><button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">Delete</button></td>` : ""}
+        ${editable ? `<td><button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">✕</button></td>` : ""}
       </tr>
+    `;
+  }
+
+  // Mobile: one tidy card per truck (no horizontal scroll).
+  function renderTruckCards(trucks, editable) {
+    if (!trucks.length) return `<div class="truck-mobile-cards"><div class="empty-state">No trucks match.</div></div>`;
+    return `
+      <div class="truck-mobile-cards">
+        ${trucks.map((t) => {
+          const row = (label, field, type = "text") => editable
+            ? `<label class="truck-card-field"><span>${label}</span><input class="table-control" type="${type}" value="${escapeHtml(t[field] || "")}" data-truck-field="${field}" data-truck-id="${t.id}" /></label>`
+            : `<div class="truck-card-field"><span>${label}</span><strong>${escapeHtml(t[field] || "–")}</strong></div>`;
+          const statusRow = editable
+            ? `<label class="truck-card-field"><span>Status</span><select class="table-control" data-truck-field="status" data-truck-id="${t.id}">${["Down","In Shop","Waiting Parts","Repaired"].map((s)=>`<option value="${s}" ${t.status===s?"selected":""}>${s}</option>`).join("")}</select></label>`
+            : `<div class="truck-card-field"><span>Status</span><span class="pill ${t.status==="Repaired"?"green":"amber"}">${escapeHtml(t.status||"Down")}</span></div>`;
+          return `
+            <article class="truck-card">
+              <div class="truck-card-head">
+                <strong>Truck ${escapeHtml(t.truckNumber || "—")}</strong>
+                ${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">Delete</button>` : `<span class="pill ${t.status==="Repaired"?"green":"amber"}">${escapeHtml(t.status||"Down")}</span>`}
+              </div>
+              ${editable ? row("Truck #", "truckNumber") : ""}
+              ${row("Issue", "issue")}
+              ${row("Date", "downDate", "date")}
+              ${row("WO #", "woNumber")}
+              ${statusRow}
+            </article>`;
+        }).join("")}
+      </div>
     `;
   }
 
@@ -4202,6 +4263,13 @@ case "hos-close-filters":
       } finally {
         importInput.value = "";
       }
+      return;
+    }
+
+    const truckFilter = event.target.closest("[data-truck-filter]");
+    if (truckFilter) {
+      truckStatusFilter = truckFilter.value;
+      render();
       return;
     }
 

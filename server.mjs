@@ -400,6 +400,7 @@ const requestHandler = (req, res) => {  // CORS Headers
             critical: body.critical !== false,
             url: '/',
             telegramText: `${title}\n${alertBody}`,
+            push: body.push !== false, // arrival/departure send push:false → Telegram only
           });
           return sendJson(200, { success: true, account: account.id, accountName: account.name, delivery });
         }
