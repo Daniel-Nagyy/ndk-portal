@@ -13,7 +13,7 @@ import {
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount, updateAccount, deleteAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
-  getRecaps, syncRecaps, getAccountByApiKey, regenerateApiKey
+  getRecaps, syncRecaps, getRecapById, deleteRecap, getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus } from './ingest-store.mjs';
 
@@ -620,6 +620,30 @@ const requestHandler = (req, res) => {  // CORS Headers
         console.error("Recaps sync error:", e);
         res.writeHead(500);
         res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    })();
+    return;
+  }
+
+  if (url.pathname === '/api/recaps/delete' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const body = await readJsonBody(req);
+        if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+        if (!isAdmin) {
+          const existing = getRecapById(body.id);
+          // Non-admins may only delete rows belonging to their own account.
+          if (existing && existing.clientId && existing.clientId !== authUser.account_id) {
+            return sendJson(403, { success: false, error: 'Forbidden' });
+          }
+        }
+        const changes = deleteRecap(body.id);
+        sendJson(200, { success: true, deleted: changes });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
       }
     })();
     return;

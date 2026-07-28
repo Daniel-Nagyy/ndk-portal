@@ -355,6 +355,15 @@ export function getRecaps(accountId = null) {
   return rows.map(r => JSON.parse(r.payload));
 }
 
+export function getRecapById(id) {
+  const r = db.prepare("SELECT * FROM recaps WHERE id = ?").get(id);
+  return r ? { id: r.id, clientId: r.client_id, dailyDate: r.daily_date, ...JSON.parse(r.payload) } : null;
+}
+
+export function deleteRecap(id) {
+  return db.prepare("DELETE FROM recaps WHERE id = ?").run(id).changes;
+}
+
 export function syncRecaps(recapsArray) {
   const stmt = db.prepare(`
     INSERT INTO recaps (id, client_id, daily_date, payload, updated_at)

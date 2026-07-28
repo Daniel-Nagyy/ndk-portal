@@ -4024,19 +4024,11 @@ textarea.table-control {
     display: none;
   }
 }
-@media (max-width: 768px) {
-  .recap-table-desktop {
-    display: none;
-  }
-  .recap-mobile-cards {
-    display: block;
-  }
-}
-@media (min-width: 769px) {
-  .recap-mobile-cards {
-    display: none;
-  }
-}
+/* One responsive table everywhere; it scrolls horizontally on small screens. */
+.recap-table-desktop { display: block; }
+.recap-mobile-cards { display: none !important; }
+.recap-table-desktop .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.vrid-edit { min-width: 120px; font-family: monospace; font-size: 12px; line-height: 1.35; }
 /* Recap mobile cards – better spacing */
 .recap-mobile-cards {
   display: grid;

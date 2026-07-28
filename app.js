@@ -2549,11 +2549,12 @@ function renderRecapPage(user) {
   return `
     <div class="section-title">
       <div>
-        <h2>Dispatcher view of Daily Recap</h2>
-        <p>Wide operating table for trip status, time checks, HOS, comments, BOL, block deep dive, and starting messages.</p>
+        <h2>Daily Recap</h2>
+        <p>Operating table for trip status, time checks, HOS, VRIDs, comments, and starting messages.</p>
       </div>
       <div class="actions-row">
         ${renderRecapTabs(user)}
+        <button class="btn btn-secondary" type="button" data-action="recap-print">Export / Print</button>
         ${editable ? `<button class="btn btn-secondary" type="button" data-action="mark-complete-visible">Complete clean rows</button>` : ""}
       </div>
     </div>
@@ -2566,15 +2567,15 @@ function renderRecapPage(user) {
           <h3>Daily recap for ${escapeHtml(formatDateLabel(selectedRecapDate))}</h3>
           <p>${rows.length} rows visible - ${day.rowCount} total for this day - source: ${escapeHtml(day.source)}.</p>
         </div>
-        <span class="pill ${editable ? "green" : "blue"}">${editable ? "Editable" : "Owner view"}</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="recap-add-row">+ Add row</button>` : ""}
+          <span class="pill ${editable ? "green" : "blue"}">${editable ? "Editable" : "Owner view"}</span>
+        </div>
       </div>
       <div class="panel-body">
-        <!-- Desktop table (hidden on mobile) -->
         <div class="recap-table-desktop">
           ${renderRecapTable(rows, editable)}
         </div>
-        <!-- Mobile card list (hidden on desktop) -->
-        ${renderRecapMobileCards(rows)}
       </div>
     </div>
   `;
@@ -2596,11 +2597,17 @@ function renderRecapPage(user) {
     return `
       <div class="recap-toolbar">
         <label class="field compact-field">
-          <span class="field-label">Daily recap day</span>
+          <span class="field-label">📅 Pick a date</span>
+          <input class="table-control date-select" type="date" data-recap-date-picker value="${escapeHtml(selectedRecapDate)}" />
+        </label>
+        <button class="btn btn-secondary btn-small" type="button" data-action="recap-today">Today</button>
+        ${dates.length ? `
+        <label class="field compact-field">
+          <span class="field-label">Days with data</span>
           <select class="table-control date-select" data-recap-date>
             ${dates.map((date) => `<option value="${date}" ${date === selectedRecapDate ? "selected" : ""}>${escapeHtml(formatDateLabel(date))}</option>`).join("")}
           </select>
-        </label>
+        </label>` : ""}
         <div class="day-meta">
           <span class="pill blue">${escapeHtml(selectedRecapDate)}</span>
           <span>${escapeHtml(recapDayDetails(user).rowCount)} rows saved for this day</span>
@@ -2659,16 +2666,12 @@ function renderRecapPage(user) {
               <th>On Duty Time</th>
               <th>Requested Start</th>
               <th>Stop 1 upcoming</th>
-              <th>Actual Check-In</th>
               <th>Scheduled Final</th>
-              <th>Final Arrival Home Yard</th>
-              <th>Driver Log Off</th>
               <th>HOS Check</th>
               <th>Late First Stop?</th>
               <th>Issues / Comments</th>
-              <th>BOL</th>
-              <th>Block Deep Dive</th>
               <th>Starting Message</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -2752,7 +2755,7 @@ function renderRecapMobileCards(rows) {
         <td>${editable ? renderSelectControl(row, "status", ["Upcoming", "In Progress", "Completed", "Delayed"]) : renderStatusPill(row.status)}</td>
         <td class="id-cell">${control("tripId")}</td>
         <td class="id-cell">${control("blockId")}</td>
-        <td class="vrids">${renderVrids(row.vrids)}</td>
+        <td class="vrids">${renderVrids(row, editable)}</td>
         <td>${editable ? renderSelectControl(row, "solo", ["Solo 1", "Solo 2"]) : `<span class="pill blue">${escapeHtml(row.solo)}</span>`}</td>
         <td class="${missing.includes("truck") ? "cell-required" : ""}">${control("truck")}</td>
         <td>${editable ? renderSelectControl(row, "dvir", ["Not Started", "Pre Trip", "Post Trip", "Completed"]) : `<span class="pill blue">${escapeHtml(row.dvir)}</span>`}</td>
@@ -2760,31 +2763,25 @@ function renderRecapMobileCards(rows) {
         <td class="${missing.includes("onDuty") ? "cell-required" : ""}">${control("onDuty")}</td>
         <td>${control("requestedStart")}</td>
         <td>${control("stopOneupcoming")}</td>
-        <td class="${missing.includes("actualCheckIn") ? "cell-required" : ""}">${control("actualCheckIn")}</td>
         <td>${control("scheduledFinal")}</td>
-        <td class="${missing.includes("finalArrivalHome") ? "cell-required" : ""}">${control("finalArrivalHome")}</td>
-        <td>${control("driverLogOff")}</td>
         <td>${editable ? renderSelectControl(row, "hosCheck", ["HOS - Shift Pre Check", "30 Minutes Completed", "Break upcoming", "HOS Risk"]) : `<span class="pill green">${escapeHtml(row.hosCheck)}</span>`}</td>
         <td>${editable ? `<input class="toggle" type="checkbox" data-recap-field="lateFirstStop" data-recap-id="${row.id}" ${row.lateFirstStop ? "checked" : ""} />` : row.lateFirstStop ? `<span class="pill red">Yes</span>` : `<span class="pill gray">No</span>`}</td>
         <td class="${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
-        <td>${editable ? renderSelectControl(row, "bol", ["Pending", "Uploaded", "Not Required", "Missing"]) : `<span class="pill ${row.bol === "Uploaded" ? "green" : "amber"}">${escapeHtml(row.bol)}</span>`}</td>
-        <td>${editable ? `<textarea class="table-control" data-recap-field="blockDeepDive" data-recap-id="${row.id}">${escapeHtml(row.blockDeepDive)}</textarea>` : `<span class="compact">${escapeHtml(row.blockDeepDive || "No deep dive")}</span>`}</td>
         <td><button class="btn btn-primary btn-small" type="button" data-action="copy-starting-message" data-recap-id="${row.id}">Copy message</button></td>
+        <td>${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="recap-delete-row" data-recap-id="${row.id}">Delete</button>` : ""}</td>
       </tr>
     `;
   }
 
-  function renderVrids(vrids) {
-    const items = Array.isArray(vrids) ? vrids.filter(Boolean) : [];
+  // VRIDs: show ALL of them. Editable = a textarea with one VRID per line (or
+  // comma separated); read-only = chips. Never truncated with "+N".
+  function renderVrids(row, editable) {
+    const items = Array.isArray(row.vrids) ? row.vrids.filter(Boolean) : [];
+    if (editable) {
+      return `<textarea class="table-control vrid-edit" rows="${Math.max(2, Math.min(items.length, 8))}" data-recap-field="vrids" data-recap-id="${row.id}" placeholder="One VRID per line">${escapeHtml(items.join("\n"))}</textarea>`;
+    }
     if (!items.length) return `<span class="muted">No VRIDs</span>`;
-    const visible = items.slice(0, 8);
-    const remaining = items.length - visible.length;
-    return `
-      <div class="vrid-list">
-        ${visible.map((vrid) => `<span class="vrid-chip">${escapeHtml(vrid)}</span>`).join("")}
-        ${remaining > 0 ? `<span class="vrid-chip more">+${remaining}</span>` : ""}
-      </div>
-    `;
+    return `<div class="vrid-list">${items.map((vrid) => `<span class="vrid-chip">${escapeHtml(vrid)}</span>`).join("")}</div>`;
   }
 
   function renderTableControl(row, field, editable) {
@@ -2801,7 +2798,7 @@ function renderRecapMobileCards(rows) {
   }
 
   function missingRequired(row) {
-    return ["truck", "fuel", "onDuty", "actualCheckIn", "finalArrivalHome"].filter((field) => !String(row[field] || "").trim());
+    return ["truck", "fuel", "onDuty"].filter((field) => !String(row[field] || "").trim());
   }
 
   function renderStatusPill(status) {
@@ -2894,6 +2891,125 @@ function renderRecapMobileCards(rows) {
 
   function makeStartingMessage(row) {
     return `Hello ${row.driverAssigned},  Requested yard time is ${row.requestedStart}, truck ${row.truck || "TBD"}, fuel ${row.fuel || "N/A"}%. Please complete HOS pre-check and DVIR before departure.`;
+  }
+
+  // Push recaps to the server right now (structural changes shouldn't wait for
+  // the 2s debounce) so add/delete is durable immediately.
+  function syncRecapsNow() {
+    if (!session) return;
+    fetch("/api/recaps/sync", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recaps: state.recaps }),
+    }).catch(() => {});
+  }
+
+  function recapClientIdFor(user) {
+    if (user && user.clientId) return user.clientId;
+    if (user && user.role === "admin") {
+      return app.querySelector("[data-import-client]")?.value || state.clients[0]?.id || null;
+    }
+    return state.clients[0]?.id || null;
+  }
+
+  function addRecapRow(user) {
+    const row = {
+      id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      clientId: recapClientIdFor(user),
+      dailyDate: selectedRecapDate,
+      driverAssigned: "",
+      tripDate: selectedRecapDate,
+      status: "Upcoming",
+      tripId: "",
+      blockId: "",
+      vrids: [],
+      solo: "Solo 1",
+      truck: "",
+      dvir: "Not Started",
+      fuel: "",
+      onDuty: "",
+      requestedStart: "",
+      stopOneupcoming: "",
+      scheduledFinal: "",
+      hosCheck: "HOS - Shift Pre Check",
+      lateFirstStop: false,
+      issues: "",
+    };
+    state.recaps.push(row);
+    recapFilter = "all"; // make sure the new blank row is visible
+    addAudit(`${user.name} added a recap row for ${selectedRecapDate}.`);
+    saveState();
+    syncRecapsNow();
+    render();
+    showToast("Row added.");
+  }
+
+  function deleteRecapRow(id) {
+    const row = state.recaps.find((r) => r.id === id);
+    if (!row) return;
+    if (!window.confirm(`Delete this recap row${row.driverAssigned ? ` for ${row.driverAssigned}` : ""}? This cannot be undone.`)) return;
+    state.recaps = state.recaps.filter((r) => r.id !== id);
+    addAudit(`${getCurrentUser().name} deleted a recap row.`);
+    saveState();
+    // Explicit server delete (sync only upserts, so it can't remove a row).
+    fetch("/api/recaps/delete", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+    render();
+    showToast("Row deleted.");
+  }
+
+  // Open a clean, printable page of the current day's recap (PDF via the print dialog).
+  function exportRecapPrintable(user) {
+    const rows = visibleRecaps(user);
+    const cols = [
+      ["#", (r, i) => i + 1],
+      ["Driver", (r) => r.driverAssigned],
+      ["Trip Date", (r) => r.tripDate],
+      ["Status", (r) => r.status],
+      ["Trip ID", (r) => r.tripId],
+      ["Block ID", (r) => r.blockId],
+      ["VRIDs", (r) => (Array.isArray(r.vrids) ? r.vrids.join(", ") : "")],
+      ["Solo", (r) => r.solo],
+      ["Truck", (r) => r.truck],
+      ["DVIR", (r) => r.dvir],
+      ["Fuel", (r) => r.fuel],
+      ["On Duty", (r) => r.onDuty],
+      ["Requested Start", (r) => r.requestedStart],
+      ["Stop 1", (r) => r.stopOneupcoming],
+      ["Scheduled Final", (r) => r.scheduledFinal],
+      ["HOS Check", (r) => r.hosCheck],
+      ["Late 1st?", (r) => (r.lateFirstStop ? "Yes" : "No")],
+      ["Issues / Comments", (r) => r.issues],
+    ];
+    const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const head = cols.map(([label]) => `<th>${esc(label)}</th>`).join("");
+    const body = rows
+      .map((r, i) => `<tr>${cols.map(([, fn]) => `<td>${esc(fn(r, i))}</td>`).join("")}</tr>`)
+      .join("");
+    const title = `Daily Recap — ${formatDateLabel(selectedRecapDate)}`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <style>
+        body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111}
+        h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:16px}
+        table{width:100%;border-collapse:collapse;font-size:11px}
+        th,td{border:1px solid #bbb;padding:4px 6px;text-align:left;vertical-align:top}
+        th{background:#f0f0f0} tr:nth-child(even) td{background:#fafafa}
+        @media print{@page{size:landscape;margin:10mm}}
+      </style></head><body>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${rows.length} rows · generated ${esc(new Date().toLocaleString())}</div>
+      <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+      <script>window.onload=function(){window.print()}<\/script>
+      </body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) { showToast("Allow pop-ups to export/print."); return; }
+    w.document.write(html);
+    w.document.close();
   }
 
   function renderShiftsPage(user) {
@@ -3844,6 +3960,19 @@ case "hos-close-filters":
       case "mark-complete-visible":
         markCleanRowsComplete(user);
         break;
+      case "recap-add-row":
+        addRecapRow(user);
+        break;
+      case "recap-delete-row":
+        deleteRecapRow(action.dataset.recapId);
+        break;
+      case "recap-today":
+        selectedRecapDate = todayISO();
+        render();
+        break;
+      case "recap-print":
+        exportRecapPrintable(user);
+        break;
       case "focus-create-shift":
         document.getElementById("create-shift")?.scrollIntoView({ behavior: "smooth", block: "center" });
         break;
@@ -3898,6 +4027,13 @@ case "hos-close-filters":
     // Don't re-render on login view to avoid clearing form inputs
     if (currentView === "login") return;
 
+    const datePicker = event.target.closest("[data-recap-date-picker]");
+    if (datePicker) {
+      if (datePicker.value) selectedRecapDate = datePicker.value;
+      render();
+      return;
+    }
+
     const dateSelect = event.target.closest("[data-recap-date]");
     if (dateSelect) {
       selectedRecapDate = dateSelect.value;
@@ -3924,6 +4060,13 @@ case "hos-close-filters":
       const row = state.recaps.find((item) => item.id === recapField.dataset.recapId);
       if (!row) return;
       const field = recapField.dataset.recapField;
+      if (field === "vrids") {
+        // All VRIDs, freely editable — split on newlines/commas, keep every one.
+        row.vrids = recapField.value.split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
+        addAudit(`${getCurrentUser().name} edited VRIDs for ${row.driverAssigned}.`);
+        saveState();
+        return;
+      }
       row[field] = recapField.type === "checkbox" ? recapField.checked : recapField.value;
       // Requested Start is always 30 minutes before Stop 1 upcoming.
       if (field === "stopOneupcoming") {
