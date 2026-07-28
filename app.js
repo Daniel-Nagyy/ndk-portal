@@ -52,7 +52,7 @@ let netradyneSortDir = 'desc';
   let searchText = "";
   let ownerHosSearchText = "";
   let ownerHosStatusFilter = "";
-  let ownerHosSortFilter = "onDutyFirst";
+  let ownerHosSortFilter = "violationRisk"; // default: highest-risk drivers first
   let ownerHosSortColumn = "";
   let ownerHosSortDir = "asc";
   let ownerHosPreserveSearchFocus = false;
@@ -1037,14 +1037,7 @@ function renderNetradyneDashboard(user) {
             <div class="eyebrow">24/7 dispatch operations</div>
             <h1>Control every shift from one desk.</h1>
             <p>Dispatchers handle active tours, owners track account performance, and admins manage users, clients, shifts, and daily recaps from a single internal workspace.</p>
-            <div class="login-metrics" aria-label="NDK operations metrics">
-              <div class="metric-tile"><strong>400+</strong><span>Drivers supported daily</span></div>
-              <div class="metric-tile"><strong>35+</strong><span>Experienced dispatchers</span></div>
-              <div class="metric-tile"><strong>80+</strong><span>Daily fleet reports</span></div>
-            </div>
           </div>
-
-          <div class="hint">Built to replace scattered Coda and Sheets workflows with role-based portal access.</div>
         </aside>
 
         <div class="login-panel-wrap">
@@ -2605,6 +2598,8 @@ function renderRecapPage(user) {
   }
 
   function renderRecapTabs(user) {
+    // Owners get a clean recap with no filter tabs.
+    if (user.role === "owner") return "";
     const tabs = [
       ["all", "All"],
       ["open", "Open"],
