@@ -866,13 +866,10 @@ function renderNetradyneDashboard(user) {
   }
 
   function ensureSelectedRecapDate(user) {
-    const dates = availableRecapDates(user);
-    if (!dates.length) {
+    // Only set a default when there's no valid date yet. Never override a date the
+    // user picked — days without data simply show the "no data" empty state.
+    if (!selectedRecapDate || !/^\d{4}-\d{2}-\d{2}$/.test(selectedRecapDate)) {
       selectedRecapDate = todayISO();
-      return;
-    }
-    if (!dates.includes(selectedRecapDate)) {
-      selectedRecapDate = dates[0];
     }
   }
 
@@ -2743,7 +2740,7 @@ function renderRecapMobileCards(rows) {
         <td>${editable ? renderSelectControl(row, "hosCheck", ["HOS - Shift Pre Check", "30 Minutes Completed", "Break upcoming", "HOS Risk"]) : `<span class="pill green">${escapeHtml(row.hosCheck)}</span>`}</td>
         <td>${editable ? `<input class="toggle" type="checkbox" data-recap-field="lateFirstStop" data-recap-id="${row.id}" ${row.lateFirstStop ? "checked" : ""} />` : row.lateFirstStop ? `<span class="pill red">Yes</span>` : `<span class="pill gray">No</span>`}</td>
         <td class="${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
-        <td><button class="btn btn-primary btn-small" type="button" data-action="copy-starting-message" data-recap-id="${row.id}">Copy message</button></td>
+        <td>${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="copy-starting-message" data-recap-id="${row.id}">Copy message</button>` : "—"}</td>
         <td>${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="recap-delete-row" data-recap-id="${row.id}">Delete</button>` : ""}</td>
       </tr>
     `;
@@ -2894,6 +2891,7 @@ function renderRecapMobileCards(rows) {
       id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       clientId: recapClientIdFor(user),
       dailyDate: selectedRecapDate,
+      assignedDispatcherId: null, // visible to any dispatcher on this account
       driverAssigned: "",
       tripDate: selectedRecapDate,
       status: "Upcoming",

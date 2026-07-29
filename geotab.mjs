@@ -191,7 +191,7 @@ async function getDriverAvailability(credentials, userId, server) {
         const cycleRemainingMinutes = typed.cycle ?? parseDurationToMinutes(item.Cycle ?? item.cycle);
         const drivingMinutes = typed.driving ?? parseDurationToMinutes(item.Driving ?? item.driving);
         const breakMinutes = typed.break ?? typed.rest ?? parseDurationToMinutes(item.Break ?? item.break ?? item.drivingBreakDuration);
-        const dutyMinutes = typed.duty ?? null;
+        const dutyMinutes = typed.duty ?? parseDurationToMinutes(item.Duty ?? item.duty);
         const workdayMinutes = typed.workday ?? parseDurationToMinutes(item.Workday ?? item.workday ?? item.Duty ?? item.duty);
         const cycleTomorrowMinutes = extractCycleAvailableTomorrowMinutes(item);
         return {
@@ -376,6 +376,11 @@ export async function computeReadiness(credentials) {
   const seen = new Set();
   const drivers = (Array.isArray(users) ? users : []).filter((user) => {
     if (!user || !user.id || !user.isDriver) return false;
+    // Geotab keeps archived/terminated drivers in the User list but sets activeTo
+    // in the past (active drivers use a far-future sentinel like 2050). Excluding
+    // them matches the driver count shown in Geotab's own HOS view.
+    const activeTo = user.activeTo ? safeDate(user.activeTo) : null;
+    if (activeTo && !Number.isNaN(activeTo.getTime()) && activeTo.getTime() < now.getTime()) return false;
     const key = typeof user.id === "string" ? user.id : JSON.stringify(user.id);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -428,7 +433,7 @@ export async function computeReadiness(credentials) {
     const row = buildRow(user, finalLogs, now, availability, availabilityError ? `Availability: ${availabilityError}` : null);
     return {
       id: row.id, driverName: row.name, status: row.currentStatus, activityStatus: row.currentStatus, vehicle: null,
-      activeTripId: null, lastStatusChange: row.lastRestStartIso || row.lastRestStart || null, breakTime: row.breakDisplay,
+      activeTripId: null, lastStatusChange: row.statusSinceIso || row.lastRestStartIso || row.lastRestStart || null, breakTime: row.breakDisplay,
       driving: row.drivingDisplay, duty: row.dutyDisplay, workday: row.workdayDisplay, cycle: row.cycleRemainingDisplay,
       updatedAt: new Date().toISOString(), clientId: null, currentStatus: row.currentStatus,
       cycleRemainingDisplay: row.cycleRemainingDisplay, cycleTomorrowDisplay: row.cycleTomorrowDisplay,
