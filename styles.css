@@ -4667,3 +4667,40 @@ textarea.table-control {
   .hos-mobile-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px; }
   .hos-mobile-metrics .hos-metric { min-width: 0 !important; }
 }
+
+/* ---- Login: stacked and centered (brand on top, form below) ---- */
+.login-screen {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  min-height: 100vh;
+  padding: 32px 18px;
+  text-align: center;
+}
+.login-brand {
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0;
+  background: none;
+  border-right: none;
+  gap: 14px;
+  max-width: 520px;
+  width: 100%;
+}
+.login-brand .brand-lockup { justify-content: center; }
+.login-copy { max-width: 520px; }
+.login-copy .eyebrow { justify-content: center; }
+.login-copy h1 { font-size: 1.5rem; }
+.login-panel-wrap { padding: 0; width: 100%; place-items: center; }
+.login-panel { width: min(100%, 420px); margin: 0 auto; text-align: left; }
+
+/* ---- Truck Tracker empty state ---- */
+.truck-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; text-align: center; padding: 40px 20px; color: var(--muted);
+}
+.truck-empty-icon { font-size: 2rem; }
+.truck-empty strong { color: var(--text); font-size: 1.05rem; }
+.truck-empty p { max-width: 360px; margin: 0; }

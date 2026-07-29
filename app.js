@@ -3019,20 +3019,24 @@ function renderRecapMobileCards(rows) {
     return user && ["dispatcher", "manager", "admin", "superadmin"].includes(user.role);
   }
 
+  const TRUCK_STATUSES = ["Active", "Inactive"];
+
+  function truckStatusPill(status) {
+    const s = status || "Active";
+    return `<span class="pill ${s === "Inactive" ? "gray" : "amber"}">${escapeHtml(s)}</span>`;
+  }
+
   function visibleTrucks() {
     let rows = downTrucks;
-    if (truckStatusFilter !== "all") rows = rows.filter((t) => (t.status || "Down") === truckStatusFilter);
+    if (truckStatusFilter !== "all") rows = rows.filter((t) => (t.status || "Active") === truckStatusFilter);
     return applySearch(rows, ["truckNumber", "issue", "woNumber", "status"]);
   }
 
   function renderTruckTracker(user) {
     const editable = canEditTrucks(user);
     const trucks = visibleTrucks();
-    const statuses = ["all", "Down", "In Shop", "Waiting Parts", "Repaired"];
-    const rowsHtml = trucks.length
-      ? trucks.map((t, i) => renderTruckRow(t, i + 1, editable)).join("")
-      : `<tr><td colspan="${editable ? 7 : 6}" class="empty-state">No trucks match. ${editable ? 'Click "+ Add truck" to log one.' : ""}</td></tr>`;
-    return `
+    const statuses = ["all", ...TRUCK_STATUSES];
+    const header = `
       <div class="section-title">
         <div>
           <h2>Truck Tracker</h2>
@@ -3041,7 +3045,25 @@ function renderRecapMobileCards(rows) {
         <div class="actions-row">
           ${editable ? `<button class="btn btn-primary" type="button" data-action="truck-add-row">+ Add truck</button>` : ""}
         </div>
-      </div>
+      </div>`;
+
+    // No trucks at all → clean, centered empty state (not a broken table row).
+    if (!downTrucks.length) {
+      return `
+        ${header}
+        <div class="panel">
+          <div class="panel-body">
+            <div class="empty-state truck-empty">
+              <div class="truck-empty-icon">🚚</div>
+              <strong>No trucks logged</strong>
+              <p>${editable ? 'Click "+ Add truck" to log a down truck with its issue and WO number.' : "No down trucks for this account right now."}</p>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    return `
+      ${header}
 
       <div class="recap-toolbar">
         <label class="field compact-field" style="flex:1;min-width:150px">
@@ -3059,9 +3081,10 @@ function renderRecapMobileCards(rows) {
       <div class="panel">
         <div class="panel-header">
           <div><h3>Down trucks</h3><p>${trucks.length} shown of ${downTrucks.length}.</p></div>
-          <span class="pill ${downTrucks.length ? "amber" : "green"}">${downTrucks.length ? `${downTrucks.length} down` : "All up"}</span>
+          <span class="pill amber">${downTrucks.length} logged</span>
         </div>
         <div class="panel-body">
+          ${trucks.length ? `
           <div class="truck-table-desktop">
             <div class="table-wrap">
               <table class="recap-table truck-table">
@@ -3076,11 +3099,12 @@ function renderRecapMobileCards(rows) {
                     ${editable ? "<th></th>" : ""}
                   </tr>
                 </thead>
-                <tbody>${rowsHtml}</tbody>
+                <tbody>${trucks.map((t, i) => renderTruckRow(t, i + 1, editable)).join("")}</tbody>
               </table>
             </div>
           </div>
           ${renderTruckCards(trucks, editable)}
+          ` : `<div class="empty-state truck-empty"><strong>No matches</strong><p>No trucks match your search or filter.</p></div>`}
         </div>
       </div>
     `;
@@ -3093,9 +3117,9 @@ function renderRecapMobileCards(rows) {
         : `<span>${escapeHtml(t[field] || "-")}</span>`;
     const statusCtl = editable
       ? `<select class="table-control" data-truck-field="status" data-truck-id="${t.id}">
-           ${["Down", "In Shop", "Waiting Parts", "Repaired"].map((s) => `<option value="${s}" ${t.status === s ? "selected" : ""}>${s}</option>`).join("")}
+           ${TRUCK_STATUSES.map((s) => `<option value="${s}" ${(t.status || "Active") === s ? "selected" : ""}>${s}</option>`).join("")}
          </select>`
-      : `<span class="pill ${t.status === "Repaired" ? "green" : "amber"}">${escapeHtml(t.status || "Down")}</span>`;
+      : truckStatusPill(t.status);
     return `
       <tr>
         <td class="row-number">${index}</td>
@@ -3119,13 +3143,13 @@ function renderRecapMobileCards(rows) {
             ? `<label class="truck-card-field"><span>${label}</span><input class="table-control" type="${type}" value="${escapeHtml(t[field] || "")}" data-truck-field="${field}" data-truck-id="${t.id}" /></label>`
             : `<div class="truck-card-field"><span>${label}</span><strong>${escapeHtml(t[field] || "–")}</strong></div>`;
           const statusRow = editable
-            ? `<label class="truck-card-field"><span>Status</span><select class="table-control" data-truck-field="status" data-truck-id="${t.id}">${["Down","In Shop","Waiting Parts","Repaired"].map((s)=>`<option value="${s}" ${t.status===s?"selected":""}>${s}</option>`).join("")}</select></label>`
-            : `<div class="truck-card-field"><span>Status</span><span class="pill ${t.status==="Repaired"?"green":"amber"}">${escapeHtml(t.status||"Down")}</span></div>`;
+            ? `<label class="truck-card-field"><span>Status</span><select class="table-control" data-truck-field="status" data-truck-id="${t.id}">${TRUCK_STATUSES.map((s)=>`<option value="${s}" ${(t.status||"Active")===s?"selected":""}>${s}</option>`).join("")}</select></label>`
+            : `<div class="truck-card-field"><span>Status</span>${truckStatusPill(t.status)}</div>`;
           return `
             <article class="truck-card">
               <div class="truck-card-head">
                 <strong>Truck ${escapeHtml(t.truckNumber || "—")}</strong>
-                ${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">Delete</button>` : `<span class="pill ${t.status==="Repaired"?"green":"amber"}">${escapeHtml(t.status||"Down")}</span>`}
+                ${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">Delete</button>` : truckStatusPill(t.status)}
               </div>
               ${editable ? row("Truck #", "truckNumber") : ""}
               ${row("Issue", "issue")}
@@ -3150,7 +3174,7 @@ function renderRecapMobileCards(rows) {
   async function addDownTruck(user) {
     const t = {
       id: `dt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      truckNumber: "", issue: "", woNumber: "", downDate: todayISO(), status: "Down",
+      truckNumber: "", issue: "", woNumber: "", downDate: todayISO(), status: "Active",
     };
     downTrucks.unshift(t);
     render();

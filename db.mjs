@@ -399,7 +399,7 @@ export function upsertDownTruck(t) {
   `).run({
     id: t.id, account_id: t.accountId, truck_number: t.truckNumber || "",
     issue: t.issue || "", wo_number: t.woNumber || "", down_date: t.downDate || "",
-    status: t.status || "Down",
+    status: t.status || "Active",
   });
   return getDownTruckById(t.id);
 }
