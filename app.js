@@ -1065,7 +1065,9 @@ function renderNetradyneDashboard(user) {
 
             <div class="login-actions">
               <button class="btn btn-primary" type="submit">Sign in</button>
+              ${isStandalone() ? "" : `<button class="btn btn-secondary" type="button" data-action="install-app">📲 Install app</button>`}
             </div>
+            ${isStandalone() ? "" : `<p class="hint" style="margin-top:10px">Install to your phone for notifications. <strong>iPhone:</strong> Share → Add to Home Screen, then open that icon.</p>`}
           </form>
         </div>
       </section>
@@ -2587,13 +2589,6 @@ function renderRecapPage(user) {
           <span class="field-label">🔎 Search</span>
           <input class="table-control" type="search" data-search placeholder="Driver, trip, block, VRID…" value="${escapeHtml(searchText)}" />
         </label>
-        ${dates.length ? `
-        <label class="field compact-field">
-          <span class="field-label">Days with data</span>
-          <select class="table-control date-select" data-recap-date>
-            ${dates.map((date) => `<option value="${date}" ${date === selectedRecapDate ? "selected" : ""}>${escapeHtml(formatDateLabel(date))}</option>`).join("")}
-          </select>
-        </label>` : ""}
         <div class="day-meta">
           <span class="pill blue">${escapeHtml(selectedRecapDate)}</span>
           <span>${escapeHtml(recapDayDetails(user).rowCount)} rows saved for this day</span>
@@ -2634,7 +2629,7 @@ function renderRecapPage(user) {
   }
 
   function renderRecapTable(rows, editable) {
-    if (!rows.length) return `<div class="empty-state">No recap rows match this view.</div>`;
+    if (!rows.length) return `<div class="empty-state truck-empty"><div class="truck-empty-icon">📅</div><strong>No data for ${escapeHtml(formatDateLabel(selectedRecapDate))}</strong><p>${searchText.trim() ? "No rows match your search." : (editable ? 'There is no recap for this day. Import a CSV or click "+ Add row" to start one.' : "There is no recap for this day.")}</p></div>`;
     return `
       <div class="table-wrap">
         <table class="recap-table">
@@ -2669,7 +2664,7 @@ function renderRecapPage(user) {
     `;
   }
 function renderRecapMobileCards(rows) {
-  if (!rows.length) return `<div class="empty-state">No recap rows match this view.</div>`;
+  if (!rows.length) return `<div class="recap-mobile-cards"><div class="empty-state truck-empty"><div class="truck-empty-icon">📅</div><strong>No data for ${escapeHtml(formatDateLabel(selectedRecapDate))}</strong><p>${searchText.trim() ? "No rows match your search." : "There is no recap for this day."}</p></div></div>`;
 
   return `
     <div class="recap-mobile-cards">
@@ -3806,7 +3801,7 @@ function renderRecapMobileCards(rows) {
               </button>
               <button class="btn btn-secondary" type="button" data-action="install-app">Install app</button>
             </div>
-            <p class="muted compact" style="margin-top:8px">Tip: on iPhone, add this site to your Home Screen first, then open it and enable notifications.</p>
+            <p class="muted compact" style="margin-top:8px"><strong>iPhone:</strong> Web push only works from the installed app — tap Share → <em>Add to Home Screen</em>, open <em>that</em> icon, then Enable notifications. Safari tabs won't receive push.</p>
           </div>
         </div>
       </div>
@@ -3882,15 +3877,56 @@ function renderRecapMobileCards(rows) {
     render();
   }
 
+  // One-tap self-test: sends a real alert to THIS user's account and reports
+  // exactly what happened (how many devices got push, Telegram status).
+  async function sendTestNotification(user) {
+    if (!user) return;
+    try {
+      const res = await fetch("/api/test-alert?type=hos&critical=0", { credentials: "same-origin" });
+      const d = await res.json();
+      if (!d.success) { showToast(d.error || "Test failed."); return; }
+      const subs = d.deviceSubscriptions ?? 0;
+      const sent = (d.push && typeof d.push.sent === "number") ? d.push.sent : 0;
+      const tg = d.telegram && d.telegram.ok ? "Telegram ✓"
+        : (d.telegram && d.telegram.skipped === "not_configured") ? "Telegram not set up"
+        : "Telegram failed";
+      if (subs === 0) {
+        showToast("No devices subscribed. Tap 'Enable phone notifications' first (on the installed app).");
+      } else {
+        showToast(`Test sent → push ${sent}/${subs} device(s) · ${tg}`);
+      }
+    } catch (_) {
+      showToast("Could not reach the server for the test.");
+    }
+  }
+
+  function isStandalone() {
+    return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  }
+  function isIOS() {
+    return /iphone|ipad|ipod/i.test(window.navigator.userAgent) ||
+      (window.navigator.platform === "MacIntel" && window.navigator.maxTouchPoints > 1);
+  }
+
   async function installOwnerApp() {
-    if (!installPromptEvent) {
-      showToast("Install prompt is not available in this browser yet.");
+    if (isStandalone()) {
+      showToast("The app is already installed — open it from your home screen.");
       return;
     }
-    installPromptEvent.prompt();
-    await installPromptEvent.userChoice.catch(() => null);
-    installPromptEvent = null;
-    render();
+    // Android/desktop Chrome: use the captured install prompt.
+    if (installPromptEvent) {
+      installPromptEvent.prompt();
+      await installPromptEvent.userChoice.catch(() => null);
+      installPromptEvent = null;
+      render();
+      return;
+    }
+    // iOS Safari has no prompt event — guide the user to Add to Home Screen.
+    if (isIOS()) {
+      showToast("On iPhone: tap the Share button, then 'Add to Home Screen'.");
+      return;
+    }
+    showToast("To install: open your browser menu and choose 'Install app' / 'Add to Home Screen'.");
   }
 
   async function queueOwnerHosNotifications(user, force = false) {
@@ -4887,12 +4923,13 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
   function resetPassword(userId) {
     const user = state.users.find((item) => item.id === userId);
     if (!user) return;
-    user.password = "Welcome123";
+    const temp = `Ndk-${Math.random().toString(36).slice(2, 8)}${Math.floor(10 + Math.random() * 89)}`;
+    user.password = temp;
     user.temporaryPassword = true;
     addAudit(`${getCurrentUser().name} reset ${user.name}'s password.`);
     saveState();
     render();
-    showToast(`${user.name}'s temporary password is Welcome123.`);
+    showToast(`${user.name}'s temporary password is ${temp}`);
   }
 
   function takeShift(shiftId, user) {

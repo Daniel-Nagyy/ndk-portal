@@ -5,6 +5,12 @@ import { log } from './logger.js';
 // account = { id, name }; alerts = newly-added alert objects
 export async function notifyAlerts(account, alerts) {
   for (const alert of alerts) {
+    // Positive/recognition events (Star driver, green-zone, etc.) are good news —
+    // never send a notification for them.
+    if (alert.severity === 'Positive') {
+      log.info(`[${account.id}] skipped positive Netradyne alert ${alert.externalAlertId}`);
+      continue;
+    }
     const time = alert.occurredAt
       ? new Date(alert.occurredAt).toLocaleString('en-US', { timeZone: 'America/New_York' })
       : 'Unknown time';
@@ -27,7 +33,7 @@ export async function notifyAlerts(account, alerts) {
       await notifyAccount(account.id, {
         title, body,
         tag: `nd-${alert.externalAlertId}`,
-        critical: isCritical,
+        critical: true, // all (non-positive) Netradyne alerts are high-urgency
         url: '/index.html',
         telegramText,
       });

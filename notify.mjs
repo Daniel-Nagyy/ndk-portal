@@ -20,11 +20,14 @@ export async function sendPushToAccount(accountId, payload) {
   const subs = getSubscriptionsForAccount(accountId);
   if (!subs.length) return { sent: 0, skipped: "no_subscriptions" };
   const body = JSON.stringify(payload);
+  // Urgency:high tells APNs/FCM to deliver immediately instead of batching to
+  // save battery — critical alerts were arriving minutes late without this.
+  const options = { urgency: payload.critical ? "high" : "normal", TTL: 600 };
   let sent = 0;
   let pruned = 0;
   await Promise.all(subs.map(async (sub) => {
     try {
-      await webpush.sendNotification(sub, body);
+      await webpush.sendNotification(sub, body, options);
       sent += 1;
     } catch (error) {
       const status = error?.statusCode;

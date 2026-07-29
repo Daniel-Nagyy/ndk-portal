@@ -421,14 +421,24 @@ const requestHandler = (req, res) => {  // CORS Headers
   if (url.pathname === '/api/test-alert') {
     (async () => {
       try {
-        const authUser = getAuthUser(req);
-        if (!authUser) return sendJson(401, { success: false, error: 'Log in first' });
-        // Superadmin may target any account via ?accountId=; others only their own.
-        const requested = url.searchParams.get('accountId');
-        const accountId = (requested && (authUser.role === 'superadmin' || authUser.account_id === requested))
-          ? requested
-          : authUser.account_id;
-        if (!accountId) return sendJson(400, { success: false, error: 'No account. Pass ?accountId=<id> (superadmin) or log in as an account user.' });
+        // Two ways to target an account:
+        //  1) ?apiKey=<account key>  → no login needed (shareable test URL per account)
+        //  2) logged in: your own account, or superadmin via ?accountId=<id>
+        let accountId = null;
+        const keyParam = url.searchParams.get('apiKey') || url.searchParams.get('key');
+        if (keyParam) {
+          const acct = getAccountByApiKey(keyParam);
+          if (!acct) return sendJson(401, { success: false, error: 'Invalid API key' });
+          accountId = acct.id;
+        } else {
+          const authUser = getAuthUser(req);
+          if (!authUser) return sendJson(401, { success: false, error: 'Log in, or pass ?apiKey=<account key>' });
+          const requested = url.searchParams.get('accountId');
+          accountId = (requested && (authUser.role === 'superadmin' || authUser.account_id === requested))
+            ? requested
+            : authUser.account_id;
+        }
+        if (!accountId) return sendJson(400, { success: false, error: 'No account. Pass ?apiKey=<key> or ?accountId=<id> (superadmin).' });
         const type = (url.searchParams.get('type') || 'hos').toLowerCase();
         const critical = url.searchParams.get('critical') !== '0';
         const nowEt = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
@@ -462,6 +472,29 @@ const requestHandler = (req, res) => {  // CORS Headers
   }
 
   // Diagnostics: which device (endpoint) is subscribed under which account.
+  // Production readiness snapshot (superadmin): is push/data/telegram wired?
+  if (url.pathname === '/api/health' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser || authUser.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+    const dbPath = process.env.DB_PATH || 'ndk-portal.db';
+    const health = {
+      pushConfigured: pushConfigured(),                       // VAPID keys present
+      encryptionKeySet: Boolean(process.env.APP_ENCRYPTION_KEY),
+      dbPath,
+      dbOnVolume: dbPath.startsWith('/') && !dbPath.startsWith('/app'), // heuristic: absolute, not the code dir
+      telegramGlobalConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+      accounts: listAccounts().map((a) => ({
+        name: a.name,
+        id: a.id,
+        pushSubscribers: getSubscriptionsForAccount(a.id).length,
+        hasTelegram: Boolean(a.telegram_chat_id),
+        hasNetradyne: Boolean(a.netradyne_email),
+        hasGeotab: Boolean(a.geotab_username),
+      })),
+    };
+    return sendJson(200, { success: true, health });
+  }
+
   if (url.pathname === '/api/push/debug' && req.method === 'GET') {
     const authUser = getAuthUser(req);
     if (!authUser || authUser.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });

@@ -92,7 +92,7 @@ async function pollAccount(account) {
       await notifyAccount(account.id, {
         title, body,
         tag: `hos-${driver.id}-${risk.metric}`,
-        critical: isCritical,
+        critical: true, // all HOS alerts are high-urgency so no one misses them
         url: "/index.html",
         telegramText,
       });
