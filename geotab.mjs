@@ -191,8 +191,10 @@ async function getDriverAvailability(credentials, userId, server) {
         const cycleRemainingMinutes = typed.cycle ?? parseDurationToMinutes(item.Cycle ?? item.cycle);
         const drivingMinutes = typed.driving ?? parseDurationToMinutes(item.Driving ?? item.driving);
         const breakMinutes = typed.break ?? typed.rest ?? parseDurationToMinutes(item.Break ?? item.break ?? item.drivingBreakDuration);
-        const dutyMinutes = typed.duty ?? parseDurationToMinutes(item.Duty ?? item.duty);
         const workdayMinutes = typed.workday ?? parseDurationToMinutes(item.Workday ?? item.workday ?? item.Duty ?? item.duty);
+        // On-duty ("Duty") remaining. Some Geotab rule sets don't return a separate
+        // `duty` value — fall back to the 14-hour workday clock so it's never blank.
+        const dutyMinutes = typed.duty ?? parseDurationToMinutes(item.Duty ?? item.duty) ?? workdayMinutes;
         const cycleTomorrowMinutes = extractCycleAvailableTomorrowMinutes(item);
         return {
           cycleRemainingMinutes,

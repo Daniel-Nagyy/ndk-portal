@@ -2304,7 +2304,7 @@ function renderHosRiskCard(driver) {
         }).join('')}
       </div>
       <div class="hrc-footer">
-        <span class="hrc-footer-item hrc-footer-time">Last change: ${escapeHtml(driver.lastStatusChange || '--')}</span>
+        <span class="hrc-footer-item hrc-footer-time">Last change: ${escapeHtml(formatDateForSelectedTimeZone(driver.lastStatusChange, '--'))}</span>
       </div>
     </article>
   `;
