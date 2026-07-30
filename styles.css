@@ -2389,8 +2389,8 @@ textarea.table-control {
 /* ----- Summary stat cards ----- */
 .hos-summary-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -4715,3 +4715,33 @@ textarea.table-control {
   line-height: 1.35;
   white-space: pre-wrap;
 }
+
+/* ===== Targeted UI spacing fixes ===== */
+
+/* Mobile sidebar: push nav below the absolute close button, more space between items. */
+@media (max-width: 1120px) {
+  .sidebar.sidebar--open .nav { margin-top: 40px; gap: 10px; }
+  .sidebar.sidebar--open .nav-btn { min-height: 46px; }
+}
+
+/* HOS mobile card: separate the status pill from the driver name. */
+.hos-mobile-status-row { margin-top: 5px; }
+.hos-mobile-card-identity .driver-name { margin-bottom: 2px; }
+
+/* HOS desktop filters: give the Status/Sort groups breathing room from the row above. */
+.hos-controls-filters { margin-top: 10px; row-gap: 10px; }
+.hos-controls-body-inner .toolbar-group { display: flex; flex-direction: column; gap: 6px; }
+.hos-controls-body-inner .toolbar-label { margin-bottom: 2px; line-height: 1.2; }
+
+/* Topbar refresh button */
+.refresh-btn.btn-icon {
+  min-width: 40px; width: 40px; height: 40px; padding: 0;
+  font-size: 1.1rem; line-height: 1; display: inline-flex;
+  align-items: center; justify-content: center;
+}
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+.refresh-btn.is-refreshing { animation: ndk-spin 0.8s linear infinite; }
+@keyframes ndk-spin { to { transform: rotate(360deg); } }
+
+/* HOS desktop: separate the "X of Y drivers" meta row from the filters above it. */
+.hos-controls-meta { margin-top: 10px; }

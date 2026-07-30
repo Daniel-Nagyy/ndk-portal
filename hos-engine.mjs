@@ -17,6 +17,13 @@ const RESEND_COOLDOWN_MS = Number(process.env.HOS_RESEND_COOLDOWN_MS ?? 30 * 60 
 
 // key -> last-sent timestamp
 const sentAt = new Map();
+// `${account}:${driver}` -> last seen duty status (for status-change alerts)
+const prevStatus = new Map();
+
+const DUTY_STATUSES = new Set(["OFF", "SB", "ON", "D", "PC", "YM"]);
+function statusText(s) {
+  return ({ OFF: "Off Duty", SB: "Sleeper", ON: "On Duty", D: "Driving", PC: "Personal Conveyance", YM: "Yard Move" })[s] || s;
+}
 
 function isOnDuty(status) {
   const n = String(status || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -69,6 +76,26 @@ async function pollAccount(account) {
   let alerts = 0;
 
   for (const driver of readiness.drivers) {
+    // HOS status change (any -> any) → dispatcher Telegram only (no push to owner).
+    const cur = driver.currentStatus;
+    if (DUTY_STATUSES.has(cur)) {
+      const sKey = `${account.id}:${driver.id}`;
+      const prev = prevStatus.get(sKey);
+      if (prev && prev !== cur) {
+        await notifyAccount(account.id, {
+          title: `HOS status — ${driver.driverName}`,
+          body: `${statusText(prev)} → ${statusText(cur)}`,
+          tag: `hos-status-${driver.id}`,
+          critical: false,
+          push: false, // Telegram only
+          url: "/index.html",
+          telegramText: `🔄 HOS status change\nDriver: ${driver.driverName}\n${statusText(prev)} → ${statusText(cur)}\nAccount: ${account.name}`,
+        });
+        alerts += 1;
+      }
+      prevStatus.set(sKey, cur);
+    }
+
     for (const risk of driverRisks(driver)) {
       const key = `${account.id}:${driver.id}:${risk.metric}:${risk.threshold}`;
       if (now - (sentAt.get(key) || 0) < RESEND_COOLDOWN_MS) continue;

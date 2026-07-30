@@ -44,6 +44,7 @@
   let editingAccountId = null; // when set, the Accounts form edits this account instead of creating
   let downTrucks = []; // Truck Tracker rows — DB-backed only, never persisted to localStorage
   let truckStatusFilter = "all";
+  let dataRefreshing = false;
   let netradyneAlerts = [];
   let netradyneSearchText = '';
 let netradyneSortColumn = 'occurredAt'; // default sort by date newest first
@@ -311,6 +312,10 @@ function processHosItems(items) {
 setInterval(pollNetradyneAlerts, 10000);
 pollNetradyneAlerts();
 
+// Keep data fresh while the app stays open (recaps, trucks, HOS) without needing
+// to close/reopen. Skips data-entry views so it never interrupts editing.
+setInterval(() => { if (session) refreshAllData(false); }, 90000);
+
   setInterval(pollHosApi, 10000); // Poll every 10 seconds
   pollHosApi(); // Initial poll
 
@@ -472,6 +477,25 @@ pollNetradyneAlerts();
     }
   }
 
+  // Re-fetch server data while the app stays open (recaps, trucks, HOS, Netradyne).
+  // Manual = user tapped Refresh (always runs + toast). Auto skips data-entry views
+  // so it never clobbers something being edited.
+  async function refreshAllData(manual = false) {
+    const user = getCurrentUser();
+    if (!user) return;
+    if (!manual && DATA_ENTRY_VIEWS.includes(currentView)) return;
+    dataRefreshing = true;
+    if (manual) render();
+    try {
+      await Promise.all([loadRecaps(), loadDownTrucks()]);
+      if (["owner", "dispatcher"].includes(user.role)) await fetchGeotabDriversReadiness();
+      await pollNetradyneAlerts();
+    } catch (_) { /* ignore */ }
+    dataRefreshing = false;
+    render();
+    if (manual) showToast("Refreshed.");
+  }
+
   async function loadDownTrucks() {
     try {
       const res = await fetch("/api/down-trucks", { credentials: "same-origin" });
@@ -482,19 +506,28 @@ pollNetradyneAlerts();
     }
   }
 
-  let syncRecapsTimer = null;
   function saveState() {
+    // Local cache only. Recaps persist per-row to the server via saveRecapRow()
+    // (server-authoritative) — we no longer sync the whole array on every change.
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    if (session) {
-      clearTimeout(syncRecapsTimer);
-      syncRecapsTimer = setTimeout(() => {
-        fetch("/api/recaps/sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recaps: state.recaps })
-        }).catch(() => {});
-      }, 2000);
-    }
+  }
+
+  // Persist a single recap row. Debounced per row-id so fast typing coalesces into
+  // one save for that row, without touching any other row.
+  const recapSaveTimers = {};
+  function saveRecapRow(row, immediate = false) {
+    if (!session || !row || !row.id) return;
+    const send = () => {
+      fetch("/api/recaps/save", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recap: row }),
+      }).catch(() => {});
+    };
+    clearTimeout(recapSaveTimers[row.id]);
+    if (immediate) { send(); return; }
+    recapSaveTimers[row.id] = setTimeout(send, 600);
   }
 
   function saveSession() {
@@ -706,7 +739,7 @@ function renderNetradyneDashboard(user) {
   // ---- Card template ----
   const renderCard = (a) => {
     const time = a.occurredAt && !isNaN(Date.parse(a.occurredAt))
-      ? new Date(a.occurredAt).toLocaleString()
+      ? formatDateForSelectedTimeZone(a.occurredAt)
       : a.occurredAt || 'Unknown';
     const cardClass = a.severity === 'Severe' ? 'late-item-card severe-alert' : 'late-item-card';
     return `
@@ -1063,6 +1096,7 @@ function renderTopbar(user) {
         <div class="topbar-sub">${escapeHtml(todayLabel())} · ${escapeHtml(roleLabel(user.role))} · ${escapeHtml(clientName(user.clientId))}</div>
       </div>
       <div class="topbar-actions">
+        <button class="btn btn-secondary btn-icon refresh-btn ${dataRefreshing ? "is-refreshing" : ""}" type="button" data-action="refresh-data" aria-label="Refresh" title="Refresh data">↻</button>
         <button class="hamburger-btn" type="button" data-action="toggle-sidebar" aria-label="Menu">
           <span></span><span></span><span></span>
         </button>
@@ -1073,8 +1107,11 @@ function renderTopbar(user) {
 
   // Local calendar date as YYYY-MM-DD (used as the recap default instead of a fixed date).
   function todayISO() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    // Eastern-time "today" (YYYY-MM-DD) so the recap day matches US operations
+    // regardless of the viewer's local timezone.
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date());
   }
 
   function todayLabel() {
@@ -1317,7 +1354,8 @@ function parseDisplayToMinutes(value) {
       minute: "2-digit",
       hour12: true
     };
-    if (ownerHosSelectedTimeZone) options.timeZone = ownerHosSelectedTimeZone;
+    // The whole system displays Eastern time.
+    options.timeZone = ownerHosSelectedTimeZone || "America/New_York";
     return date.toLocaleString("en-US", options);
   }
 
@@ -2854,7 +2892,7 @@ function renderRecapMobileCards(rows) {
     recapFilter = "all"; // make sure the new blank row is visible
     addAudit(`${user.name} added a recap row for ${selectedRecapDate}.`);
     saveState();
-    syncRecapsNow();
+    saveRecapRow(row, true); // persist the new row immediately (server-authoritative)
     render();
     showToast("Row added.");
   }
@@ -2920,7 +2958,7 @@ function renderRecapMobileCards(rows) {
         @media print{@page{size:landscape;margin:10mm}}
       </style></head><body>
       <h1>${esc(title)}</h1>
-      <div class="sub">${rows.length} rows · generated ${esc(new Date().toLocaleString())}</div>
+      <div class="sub">${rows.length} rows · generated ${esc(formatDateForSelectedTimeZone(new Date().toISOString()))} ET</div>
       <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
       </body></html>`;
 
@@ -4181,6 +4219,9 @@ case "hos-close-filters":
       case "recap-print":
         exportRecapPrintable(user);
         break;
+      case "refresh-data":
+        await refreshAllData(true);
+        break;
       case "truck-add-row":
         await addDownTruck(user);
         break;
@@ -4301,6 +4342,7 @@ case "hos-close-filters":
         row.vrids = recapField.value.split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
         addAudit(`${getCurrentUser().name} edited VRIDs for ${row.driverAssigned}.`);
         saveState();
+        saveRecapRow(row);
         return;
       }
       row[field] = recapField.type === "checkbox" ? recapField.checked : recapField.value;
@@ -4315,6 +4357,7 @@ case "hos-close-filters":
       }
       addAudit(`${getCurrentUser().name} updated ${row.driverAssigned} ${field}.`);
       saveState();
+      saveRecapRow(row); // per-row server save (debounced)
       // No full re-render here: the value is already in the field and saved. Rebuilding
       // the table would move the cursor/focus and interrupt editing. Just refresh the
       // row's "has issue / required" styling in place.
@@ -4626,6 +4669,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
     recapFilter = "all";
     addAudit(`${user.name} imported ${created} new and ${updated} updated recap rows from ${file.name}.`);
     saveState();
+    syncRecapsNow(); // bulk import → one full sync (deliberate bulk action)
     render();
     showToast(`Imported ${created} new rows and updated ${updated} rows from ${file.name}.`);
   }

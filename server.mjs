@@ -716,6 +716,28 @@ const requestHandler = (req, res) => {  // CORS Headers
     return;
   }
 
+  // Save ONE recap row (upsert). Per-row saves are far more stable than syncing
+  // the whole array on every keystroke.
+  if (url.pathname === '/api/recaps/save' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const body = await readJsonBody(req);
+        const r = body.recap || body;
+        if (!r || !r.id) return sendJson(400, { success: false, error: 'recap id required' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+        if (!isAdmin) r.clientId = authUser.account_id; // pin non-admins to their account
+        if (!r.clientId || !r.dailyDate) return sendJson(400, { success: false, error: 'clientId and dailyDate required' });
+        syncRecaps([r]); // upsert by id
+        sendJson(200, { success: true, id: r.id });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
+      }
+    })();
+    return;
+  }
+
   if (url.pathname === '/api/recaps/delete' && req.method === 'POST') {
     (async () => {
       try {
