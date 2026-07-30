@@ -187,80 +187,9 @@ const oldStatusMap = {};
       readiness: driver.readiness || 'NO LOGS'
     }));
     
-// Append test drivers for notification & UI testing
-
-// New alerts: status change, elapsed, thresholds
-const now = new Date();
-const thresholds = [60, 30, 10];
-const metricFields = [
-  { field: 'breakDisplay', label: 'Break' },
-  { field: 'drivingDisplay', label: 'Drive' },
-  { field: 'workdayDisplay', label: 'Shift' },
-  { field: 'cycleRemainingDisplay', label: 'Cycle' },
-];
-
-for (const driver of state.hosDrivers) {
-  // --- Status change detection ---
-  const newStatus = driver.currentStatus || driver.status;
-  const oldStatus = oldStatusMap[driver.id];
-  if (oldStatus && oldStatus !== newStatus) {
-    const wasOnDuty = oldStatus === 'D' || oldStatus === 'ON';
-    const isOnDuty = newStatus === 'D' || newStatus === 'ON';
-    if (wasOnDuty && !isOnDuty) {
-      await sendStatusChangeNotification(driver, 'off');
-    } else if (!wasOnDuty && isOnDuty) {
-      await sendStatusChangeNotification(driver, 'on');
-    }
-  }
-
-  // --- 30‑minute on‑duty elapsed ---
-  const onDutyStatus = driver.currentStatus || driver.status;
-  if (onDutyStatus === 'D' || onDutyStatus === 'ON') {
-    const since = driver.statusSinceIso ? new Date(driver.statusSinceIso) : null;
-    if (since) {
-      const elapsed = (now - since) / 60000;
-      if (elapsed >= 30) {
-        const key = `${driver.id}:${driver.statusSinceIso}`;
-        if (!elapsedNotified[key]) {
-          elapsedNotified[key] = Date.now();
-          saveNotificationMemory(ELAPSED_MEMORY_KEY, elapsedNotified);
-          const title = `${driver.driverName} on duty for 30 min`;
-          const body = `Status: ${displayStatus(onDutyStatus)} since ${driver.statusSinceDisplay || ''}`;
-if (document.visibilityState === 'visible') {
-  showInAppBanner(title, body, false);
-} else {
-  new Notification(title, { body, tag: `elapsed-${driver.id}`, requireInteraction: false });
-}          await sendTelegramAlert(title, body);
-        }
-      }
-    }
-  }
-
-  // --- HOS threshold alerts ---
-  if (onDutyStatus === 'D' || onDutyStatus === 'ON') {
-    for (const { field, label } of metricFields) {
-      const minutes = parseDisplayToMinutes(driver[field]);
-      if (!Number.isFinite(minutes) || minutes < 0) continue;
-      for (const threshold of thresholds) {
-        // Alert when value just dropped below the threshold (within a 5‑minute window)
-        if (minutes <= threshold && minutes > threshold - 5) {
-          const key = `${driver.id}:${field}:${threshold}`;
-          if (!thresholdNotified[key]) {
-            thresholdNotified[key] = Date.now();
-            saveNotificationMemory(THRESHOLD_MEMORY_KEY, thresholdNotified);
-            const title = `HOS ${label} at ${minutes} min`;
-            const body = `${driver.driverName}: ${label} ${driver[field]} left`;
-if (document.visibilityState === 'visible') {
-  showInAppBanner(title, body, true);
-} else {
-  new Notification(title, { body, tag: `thresh-${driver.id}-${field}`, requireInteraction: true });
-}            await sendTelegramAlert(title, body);
-          }
-        }
-      }
-    }
-  }
-}
+// NOTE: HOS alerts are sent ONLY by the server-side HOS engine (hos-engine.mjs)
+// via account-scoped Web Push + Telegram. The client no longer fires its own HOS
+// notifications — doing both caused duplicate alerts. This function only renders data.
     ownerHosTotalDrivers = result.totalDrivers || state.hosDrivers.length;
     ownerHosLastGeneratedAt = result.generatedAt || new Date().toISOString();
     saveState();
@@ -434,6 +363,16 @@ pollNetradyneAlerts();
     const output = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
     return output;
+  }
+
+  // Silently re-register the push subscription on every launch (if already granted)
+  // so a rotated/expired subscription self-heals instead of quietly going dead.
+  function refreshPushSubscription() {
+    try {
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        subscribeToPush().catch(() => {});
+      }
+    } catch (_) { /* ignore */ }
   }
 
   // Subscribe this device to Web Push so alerts arrive when the app is closed.
@@ -678,6 +617,7 @@ pollNetradyneAlerts();
         await loadRecaps();
         await loadDownTrucks();
         render();
+        refreshPushSubscription();
         if (appUser.role === "owner") fetchGeotabDriversReadiness();
       } else {
         session = null;
@@ -2739,7 +2679,7 @@ function renderRecapMobileCards(rows) {
         <td>${control("scheduledFinal")}</td>
         <td>${editable ? renderSelectControl(row, "hosCheck", ["HOS - Shift Pre Check", "30 Minutes Completed", "Break upcoming", "HOS Risk"]) : `<span class="pill green">${escapeHtml(row.hosCheck)}</span>`}</td>
         <td>${editable ? `<input class="toggle" type="checkbox" data-recap-field="lateFirstStop" data-recap-id="${row.id}" ${row.lateFirstStop ? "checked" : ""} />` : row.lateFirstStop ? `<span class="pill red">Yes</span>` : `<span class="pill gray">No</span>`}</td>
-        <td class="${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
+        <td class="recap-issues-cell ${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control issues-box" rows="4" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
         <td>${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="copy-starting-message" data-recap-id="${row.id}">Copy message</button>` : "—"}</td>
         <td>${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="recap-delete-row" data-recap-id="${row.id}">Delete</button>` : ""}</td>
       </tr>
@@ -2969,9 +2909,14 @@ function renderRecapMobileCards(rows) {
       <style>
         body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111}
         h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:16px}
-        table{width:100%;border-collapse:collapse;font-size:11px}
-        th,td{border:1px solid #bbb;padding:4px 6px;text-align:left;vertical-align:top}
+        table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}
+        /* Wrap long text so nothing overflows/breaks the layout, keep newlines. */
+        th,td{border:1px solid #bbb;padding:4px 6px;text-align:left;vertical-align:top;
+              word-break:break-word;overflow-wrap:anywhere;white-space:pre-wrap}
+        /* Issues / Comments (last column) gets the most room since it holds the most. */
+        th:last-child,td:last-child{width:28%}
         th{background:#f0f0f0} tr:nth-child(even) td{background:#fafafa}
+        tr{break-inside:avoid}
         @media print{@page{size:landscape;margin:10mm}}
       </style></head><body>
       <h1>${esc(title)}</h1>
@@ -3928,8 +3873,10 @@ function renderRecapMobileCards(rows) {
   }
 
   async function queueOwnerHosNotifications(user, force = false) {
-    if (!user || user.role !== "owner" || notificationPermission() !== "granted") return;
-
+    // Disabled: HOS alerts are sent by the server-side HOS engine (push + Telegram).
+    // Firing them here too produced duplicate notifications.
+    return;
+    // eslint-disable-next-line no-unreachable
     const drivers = (state.hosDrivers || []).filter((driver) => !driver.clientId || driver.clientId === user.clientId);
     const alerts = [];
     for (const driver of drivers) {
@@ -3952,6 +3899,10 @@ function renderRecapMobileCards(rows) {
   }
 
   async function syncHosAlertsToTelegram(drivers) {
+    // Disabled: the server-side HOS engine sends Telegram. This client path was a
+    // duplicate source of the same alerts.
+    return;
+    // eslint-disable-next-line no-unreachable
     if (!drivers?.length) return;
     try {
       await fetch("/api/hos-alerts/sync", {
@@ -4464,6 +4415,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       await loadRecaps();
       await loadDownTrucks();
       render();
+      refreshPushSubscription();
       if (appUser.role === "owner") fetchGeotabDriversReadiness();
       showToast(`Welcome, ${appUser.name}.`);
     } catch (error) {

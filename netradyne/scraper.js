@@ -50,12 +50,14 @@ export async function scrapeAlerts(context) {
 
   try {
     await page.goto(NETRADYNE.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    // Wait for both the alert data and the alert-type config (for severity).
+    // Wait for the alert data (required) and the alert-type config (for severity,
+    // shorter wait). Resolve as soon as the alert payload arrives instead of a
+    // fixed long wait — that was adding seconds to every poll.
     await Promise.allSettled([
-      page.waitForResponse((r) => ALERTS_API_RE.test(r.url()), { timeout: 25000 }),
-      page.waitForResponse((r) => VISIBLE_API_RE.test(r.url()), { timeout: 25000 }),
+      page.waitForResponse((r) => ALERTS_API_RE.test(r.url()), { timeout: 20000 }),
+      page.waitForResponse((r) => VISIBLE_API_RE.test(r.url()), { timeout: 8000 }),
     ]);
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(800);
 
     const byId = new Map();
     const vehicleIdMap = {};

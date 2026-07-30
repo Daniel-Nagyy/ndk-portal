@@ -103,7 +103,10 @@ async function pollAccount(account) {
 }
 
 export function startHosEngine() {
-  const intervalMs = Number(process.env.HOS_ENGINE_POLL_MS || 180000); // 3 min default
+  // Randomized poll window so the cadence isn't a fixed pattern (default 60–150s).
+  const minMs = Number(process.env.HOS_ENGINE_MIN_POLL_MS || 60000);
+  const maxMs = Number(process.env.HOS_ENGINE_MAX_POLL_MS || 150000);
+  const nextDelay = () => Math.floor(minMs + Math.random() * Math.max(0, maxMs - minMs));
   const run = async () => {
     for (const account of listAccounts()) {
       try {
@@ -114,7 +117,11 @@ export function startHosEngine() {
       }
     }
   };
-  run();
-  setInterval(run, intervalMs);
-  console.log(`HOS alert engine started (every ${Math.round(intervalMs / 1000)}s; thresholds 60 & 30 min)`);
+  // Self-reschedule with a fresh random delay after each pass (avoids overlap too).
+  const loop = async () => {
+    await run();
+    setTimeout(loop, nextDelay());
+  };
+  loop();
+  console.log(`HOS alert engine started (randomized ${Math.round(minMs / 1000)}–${Math.round(maxMs / 1000)}s; thresholds 60 & 30 min)`);
 }

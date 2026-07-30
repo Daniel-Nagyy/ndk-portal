@@ -170,6 +170,50 @@ function extractCycleAvailableTomorrowMinutes(item) {
   return parseDurationToMinutes(candidates);
 }
 
+// Shared: turn one raw DutyStatusAvailability item into the availability object.
+// Used by both the per-driver fetch and the batched ExecuteMultiCall path so they
+// produce byte-identical output.
+function parseAvailabilityItem(item) {
+  const typed = availabilityTypeMap(item);
+  const cycleRemainingMinutes = typed.cycle ?? parseDurationToMinutes(item.Cycle ?? item.cycle);
+  const drivingMinutes = typed.driving ?? parseDurationToMinutes(item.Driving ?? item.driving);
+  const breakMinutes = typed.break ?? typed.rest ?? parseDurationToMinutes(item.Break ?? item.break ?? item.drivingBreakDuration);
+  const workdayMinutes = typed.workday ?? parseDurationToMinutes(item.Workday ?? item.workday ?? item.Duty ?? item.duty);
+  // On-duty ("Duty") remaining. Some Geotab rule sets don't return a separate
+  // `duty` value — fall back to the 14-hour workday clock so it's never blank.
+  const dutyMinutes = typed.duty ?? parseDurationToMinutes(item.Duty ?? item.duty) ?? workdayMinutes;
+  const cycleTomorrowMinutes = extractCycleAvailableTomorrowMinutes(item);
+  return {
+    cycleRemainingMinutes,
+    cycleRemainingDisplay: formatMinutes(cycleRemainingMinutes),
+    cycleTomorrowMinutes,
+    cycleTomorrowDisplay: formatMinutes(cycleTomorrowMinutes),
+    drivingMinutes,
+    drivingDisplay: formatMinutes(drivingMinutes),
+    dutyMinutes,
+    dutyDisplay: formatMinutes(dutyMinutes),
+    workdayMinutes,
+    workdayDisplay: formatMinutes(workdayMinutes),
+    breakMinutes,
+    breakDisplay: formatMinutes(breakMinutes),
+    cycleRaw: item,
+    availabilityError: null
+  };
+}
+
+function emptyAvailability(error = null) {
+  return {
+    cycleRemainingMinutes: null, cycleRemainingDisplay: "--",
+    cycleTomorrowMinutes: null, cycleTomorrowDisplay: "--",
+    drivingMinutes: null, drivingDisplay: "--",
+    dutyMinutes: null, dutyDisplay: "--",
+    workdayMinutes: null, workdayDisplay: "--",
+    breakMinutes: null, breakDisplay: "--",
+    cycleRaw: null,
+    availabilityError: error ? simplifyError(error) : null
+  };
+}
+
 async function getDriverAvailability(credentials, userId, server) {
   const searches = [
     { userSearch: { id: userId } },
@@ -186,47 +230,13 @@ async function getDriverAvailability(credentials, userId, server) {
         search
       }, { retries: 2, delayMs: 400, server });
       if (Array.isArray(result) && result.length) {
-        const item = result[0];
-        const typed = availabilityTypeMap(item);
-        const cycleRemainingMinutes = typed.cycle ?? parseDurationToMinutes(item.Cycle ?? item.cycle);
-        const drivingMinutes = typed.driving ?? parseDurationToMinutes(item.Driving ?? item.driving);
-        const breakMinutes = typed.break ?? typed.rest ?? parseDurationToMinutes(item.Break ?? item.break ?? item.drivingBreakDuration);
-        const workdayMinutes = typed.workday ?? parseDurationToMinutes(item.Workday ?? item.workday ?? item.Duty ?? item.duty);
-        // On-duty ("Duty") remaining. Some Geotab rule sets don't return a separate
-        // `duty` value — fall back to the 14-hour workday clock so it's never blank.
-        const dutyMinutes = typed.duty ?? parseDurationToMinutes(item.Duty ?? item.duty) ?? workdayMinutes;
-        const cycleTomorrowMinutes = extractCycleAvailableTomorrowMinutes(item);
-        return {
-          cycleRemainingMinutes,
-          cycleRemainingDisplay: formatMinutes(cycleRemainingMinutes),
-          cycleTomorrowMinutes,
-          cycleTomorrowDisplay: formatMinutes(cycleTomorrowMinutes),
-          drivingMinutes,
-          drivingDisplay: formatMinutes(drivingMinutes),
-          dutyMinutes,
-          dutyDisplay: formatMinutes(dutyMinutes),
-          workdayMinutes,
-          workdayDisplay: formatMinutes(workdayMinutes),
-          breakMinutes,
-          breakDisplay: formatMinutes(breakMinutes),
-          cycleRaw: item,
-          availabilityError: null
-        };
+        return parseAvailabilityItem(result[0]);
       }
     } catch (error) {
       lastError = error;
     }
   }
-  return {
-    cycleRemainingMinutes: null, cycleRemainingDisplay: "--",
-    cycleTomorrowMinutes: null, cycleTomorrowDisplay: "--",
-    drivingMinutes: null, drivingDisplay: "--",
-    dutyMinutes: null, dutyDisplay: "--",
-    workdayMinutes: null, workdayDisplay: "--",
-    breakMinutes: null, breakDisplay: "--",
-    cycleRaw: null,
-    availabilityError: lastError ? simplifyError(lastError) : null
-  };
+  return emptyAvailability(lastError);
 }
 
 async function getDriverLogs(credentials, userId, server) {
@@ -360,9 +370,43 @@ function buildRow(user, logs, now, availability = {}, extraNote = null) {
   return { ...base, cycleResetMinutes: cycleReset.cycleResetMinutes, cycleResetDisplay: cycleReset.cycleResetDisplay, currentStatus: latest.status, readiness: "NOT READY", lastRestStart: formatDate(restStart), lastRestStartIso: restStart.toISOString(), minutesLeft: remainingMinutes, remainingDisplay: formatMinutes(remainingMinutes), note: extraNote || `Needs ${formatMinutes(remainingMinutes)} to complete 10-hour rest.` };
 }
 
-// Orchestrator: authenticate, fetch drivers, compute a readiness row for each.
-// credentials = { server, database, username, password }
-export async function computeReadiness(credentials) {
+const MAX_LOG_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Given a driver's logs + availability, produce the final readiness record.
+// Shared by the per-driver and batched paths so both emit identical output.
+function finalizeDriverRecord(user, name, finalLogs, finalLogsError, availability, availabilityError, now) {
+  if (finalLogsError) {
+    return {
+      id: user.id, driverName: name, status: "Error", vehicle: null, activeTripId: null, lastStatusChange: null,
+      breakTime: availability.breakDisplay, driving: availability.drivingDisplay, duty: availability.dutyDisplay,
+      workday: availability.workdayDisplay, cycle: availability.cycleRemainingDisplay, updatedAt: new Date().toISOString(),
+      clientId: null, currentStatus: "Error", cycleRemainingDisplay: availability.cycleRemainingDisplay,
+      cycleTomorrowDisplay: availability.cycleTomorrowDisplay, drivingDisplay: availability.drivingDisplay,
+      dutyDisplay: availability.dutyDisplay, workdayDisplay: availability.workdayDisplay, breakDisplay: availability.breakDisplay,
+      cycleResetDisplay: availability.cycleResetDisplay ?? "--",
+      note: finalLogsError ? `Logs: ${finalLogsError} ${availabilityError ? `| Avail: ${availabilityError}` : ""}` : null,
+      statusSinceDisplay: null, statusSinceIso: null, readiness: "NO LOGS"
+    };
+  }
+  const row = buildRow(user, finalLogs, now, availability, availabilityError ? `Availability: ${availabilityError}` : null);
+  return {
+    id: row.id, driverName: row.name, status: row.currentStatus, activityStatus: row.currentStatus, vehicle: null,
+    activeTripId: null, lastStatusChange: row.statusSinceIso || row.lastRestStartIso || row.lastRestStart || null, breakTime: row.breakDisplay,
+    driving: row.drivingDisplay, duty: row.dutyDisplay, workday: row.workdayDisplay, cycle: row.cycleRemainingDisplay,
+    updatedAt: new Date().toISOString(), clientId: null, currentStatus: row.currentStatus,
+    cycleRemainingDisplay: row.cycleRemainingDisplay, cycleTomorrowDisplay: row.cycleTomorrowDisplay,
+    drivingDisplay: row.drivingDisplay, dutyDisplay: row.dutyDisplay, workdayDisplay: row.workdayDisplay,
+    breakDisplay: row.breakDisplay, cycleResetDisplay: row.cycleResetDisplay, remainingDisplay: row.remainingDisplay,
+    statusSinceDisplay: row.statusSinceDisplay, statusSinceIso: row.statusSinceIso, note: row.note, readiness: row.readiness
+  };
+}
+
+function driverDisplayName(user) {
+  return `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.name || user.userName || "Unknown Driver";
+}
+
+// Authenticate, fetch users, and return the active-driver list (shared by both paths).
+async function authAndActiveDrivers(credentials) {
   const server = credentials.server || DEFAULT_SERVER;
   const auth = await authenticate({
     database: credentials.database,
@@ -371,16 +415,11 @@ export async function computeReadiness(credentials) {
     server
   });
   const geotabCredentials = auth.credentials;
-
   const users = await geotabCallWithRetry("Get", { typeName: "User", credentials: geotabCredentials }, { retries: 2, delayMs: 400, server });
-
   const now = new Date();
   const seen = new Set();
   const drivers = (Array.isArray(users) ? users : []).filter((user) => {
     if (!user || !user.id || !user.isDriver) return false;
-    // Geotab keeps archived/terminated drivers in the User list but sets activeTo
-    // in the past (active drivers use a far-future sentinel like 2050). Excluding
-    // them matches the driver count shown in Geotab's own HOS view.
     const activeTo = user.activeTo ? safeDate(user.activeTo) : null;
     if (activeTo && !Number.isNaN(activeTo.getTime()) && activeTo.getTime() < now.getTime()) return false;
     const key = typeof user.id === "string" ? user.id : JSON.stringify(user.id);
@@ -388,18 +427,31 @@ export async function computeReadiness(credentials) {
     seen.add(key);
     return true;
   });
+  return { server, geotabCredentials, drivers, now };
+}
 
+function assembleReadiness(rows) {
+  rows.sort((a, b) => String(a.driverName || "").localeCompare(String(b.driverName || "")));
+  const summary = {
+    ready: rows.filter((row) => row.readiness === "READY").length,
+    notReady: rows.filter((row) => row.readiness === "NOT READY").length,
+    noLogs: rows.filter((row) => row.readiness === "NO LOGS").length
+  };
+  return { drivers: rows, summary, totalDrivers: rows.length, generatedAt: new Date().toISOString() };
+}
+
+// --- Path A: original per-driver fetch (default; unchanged behavior) ---
+async function computeReadinessPerDriver(credentials) {
+  const { server, geotabCredentials, drivers, now } = await authAndActiveDrivers(credentials);
   const rows = await Promise.all(drivers.map(async (user) => {
-    const name = `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.name || user.userName || "Unknown Driver";
+    const name = driverDisplayName(user);
     const [logsResult, availability] = await Promise.all([
       getDriverLogs(geotabCredentials, user.id, server),
       getDriverAvailability(geotabCredentials, user.id, server)
     ]);
-
     let finalLogs = logsResult.logs;
     let finalLogsError = logsResult.logsError;
     const availabilityError = availability.availabilityError || null;
-    const MAX_LOG_AGE_MS = 30 * 24 * 60 * 60 * 1000;
     finalLogs = (finalLogs || []).filter((log) => {
       const logTime = new Date(log.dateTime).getTime();
       return !isNaN(logTime) && (now.getTime() - logTime <= MAX_LOG_AGE_MS);
@@ -417,40 +469,68 @@ export async function computeReadiness(credentials) {
         finalLogsError = simplifyError(error);
       }
     }
-
-    if (finalLogsError) {
-      return {
-        id: user.id, driverName: name, status: "Error", vehicle: null, activeTripId: null, lastStatusChange: null,
-        breakTime: availability.breakDisplay, driving: availability.drivingDisplay, duty: availability.dutyDisplay,
-        workday: availability.workdayDisplay, cycle: availability.cycleRemainingDisplay, updatedAt: new Date().toISOString(),
-        clientId: null, currentStatus: "Error", cycleRemainingDisplay: availability.cycleRemainingDisplay,
-        cycleTomorrowDisplay: availability.cycleTomorrowDisplay, drivingDisplay: availability.drivingDisplay,
-        dutyDisplay: availability.dutyDisplay, workdayDisplay: availability.workdayDisplay, breakDisplay: availability.breakDisplay,
-        cycleResetDisplay: availability.cycleResetDisplay ?? "--",
-        note: finalLogsError ? `Logs: ${finalLogsError} ${availabilityError ? `| Avail: ${availabilityError}` : ""}` : null,
-        statusSinceDisplay: null, statusSinceIso: null, readiness: "NO LOGS"
-      };
-    }
-
-    const row = buildRow(user, finalLogs, now, availability, availabilityError ? `Availability: ${availabilityError}` : null);
-    return {
-      id: row.id, driverName: row.name, status: row.currentStatus, activityStatus: row.currentStatus, vehicle: null,
-      activeTripId: null, lastStatusChange: row.statusSinceIso || row.lastRestStartIso || row.lastRestStart || null, breakTime: row.breakDisplay,
-      driving: row.drivingDisplay, duty: row.dutyDisplay, workday: row.workdayDisplay, cycle: row.cycleRemainingDisplay,
-      updatedAt: new Date().toISOString(), clientId: null, currentStatus: row.currentStatus,
-      cycleRemainingDisplay: row.cycleRemainingDisplay, cycleTomorrowDisplay: row.cycleTomorrowDisplay,
-      drivingDisplay: row.drivingDisplay, dutyDisplay: row.dutyDisplay, workdayDisplay: row.workdayDisplay,
-      breakDisplay: row.breakDisplay, cycleResetDisplay: row.cycleResetDisplay, remainingDisplay: row.remainingDisplay,
-      statusSinceDisplay: row.statusSinceDisplay, statusSinceIso: row.statusSinceIso, note: row.note, readiness: row.readiness
-    };
+    return finalizeDriverRecord(user, name, finalLogs, finalLogsError, availability, availabilityError, now);
   }));
+  return assembleReadiness(rows);
+}
 
-  rows.sort((a, b) => String(a.driverName || "").localeCompare(String(b.driverName || "")));
-  const summary = {
-    ready: rows.filter((row) => row.readiness === "READY").length,
-    notReady: rows.filter((row) => row.readiness === "NOT READY").length,
-    noLogs: rows.filter((row) => row.readiness === "NO LOGS").length
-  };
+// --- Path B: batched via ExecuteMultiCall (opt-in: GEOTAB_MULTICALL=1) ---
+// Collapses the ~2 calls/driver into a few HTTP requests instead of hundreds,
+// which avoids Geotab's concurrent-request throttling and slashes server load.
+async function computeReadinessMulti(credentials) {
+  const { server, geotabCredentials, drivers, now } = await authAndActiveDrivers(credentials);
+  if (!drivers.length) return assembleReadiness([]);
 
-  return { drivers: rows, summary, totalDrivers: rows.length, generatedAt: new Date().toISOString() };
+  const weekAgo = new Date(now);
+  weekAgo.setDate(now.getDate() - 7);
+
+  // 2 calls per driver: logs, then availability (same order for mapping back).
+  const calls = [];
+  for (const user of drivers) {
+    calls.push({ method: "Get", params: {
+      typeName: "DutyStatusLog", credentials: geotabCredentials,
+      search: { fromDate: weekAgo.toISOString(), toDate: now.toISOString(), userSearch: { id: user.id } },
+      resultsLimit: 500,
+    } });
+    calls.push({ method: "Get", params: {
+      typeName: "DutyStatusAvailability", credentials: geotabCredentials,
+      search: { userSearch: { id: user.id } },
+    } });
+  }
+
+  const BATCH = Number(process.env.GEOTAB_MULTICALL_BATCH || 40); // calls per multicall
+  const results = [];
+  for (let i = 0; i < calls.length; i += BATCH) {
+    const chunk = calls.slice(i, i + BATCH);
+    const res = await geotabCallWithRetry("ExecuteMultiCall", { calls: chunk, credentials: geotabCredentials }, { retries: 1, delayMs: 600, server });
+    if (!Array.isArray(res) || res.length !== chunk.length) throw new Error("ExecuteMultiCall returned unexpected shape");
+    results.push(...res);
+  }
+
+  const rows = drivers.map((user, idx) => {
+    const name = driverDisplayName(user);
+    const logsRaw = results[idx * 2];
+    const availRaw = results[idx * 2 + 1];
+    let finalLogs = Array.isArray(logsRaw) ? logsRaw : [];
+    finalLogs = finalLogs.filter((log) => {
+      const logTime = new Date(log.dateTime).getTime();
+      return !isNaN(logTime) && (now.getTime() - logTime <= MAX_LOG_AGE_MS);
+    });
+    const availability = (Array.isArray(availRaw) && availRaw.length) ? parseAvailabilityItem(availRaw[0]) : emptyAvailability();
+    return finalizeDriverRecord(user, name, finalLogs, null, availability, availability.availabilityError || null, now);
+  });
+  return assembleReadiness(rows);
+}
+
+// Orchestrator: authenticate, fetch drivers, compute a readiness row for each.
+// credentials = { server, database, username, password }
+export async function computeReadiness(credentials) {
+  if (process.env.GEOTAB_MULTICALL === "1") {
+    try {
+      return await computeReadinessMulti(credentials);
+    } catch (error) {
+      console.warn("Geotab multicall failed — falling back to per-driver:", error.message || error);
+    }
+  }
+  return computeReadinessPerDriver(credentials);
 }

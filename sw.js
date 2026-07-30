@@ -1,4 +1,36 @@
-const CACHE_NAME = "ndk-owner-app-v9";
+const CACHE_NAME = "ndk-owner-app-v10";
+
+// Re-subscribe helper: browsers periodically rotate/expire push subscriptions.
+// If we don't renew them, push silently dies until the user manually re-enables.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+async function renewPushSubscription() {
+  try {
+    const res = await fetch("/api/push/vapid-public-key");
+    const info = await res.json();
+    if (!info || !info.key) return;
+    const sub = await self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(info.key),
+    });
+    await fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subscription: sub }),
+    });
+  } catch (_) { /* best-effort; the app also refreshes on launch */ }
+}
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(renewPushSubscription());
+});
 
 // Only real, existing files. (v6 referenced /manifest.json and /icons/* which 404'd,
 // causing cache.addAll to reject and the whole service worker to fail installing —

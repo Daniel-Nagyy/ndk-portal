@@ -22,7 +22,9 @@ export async function sendPushToAccount(accountId, payload) {
   const body = JSON.stringify(payload);
   // Urgency:high tells APNs/FCM to deliver immediately instead of batching to
   // save battery — critical alerts were arriving minutes late without this.
-  const options = { urgency: payload.critical ? "high" : "normal", TTL: 600 };
+  // Urgency:high = deliver now (not battery-batched). TTL: hold a critical alert
+  // up to 1h if the phone is briefly offline so it isn't dropped/missed.
+  const options = { urgency: payload.critical ? "high" : "normal", TTL: payload.critical ? 3600 : 600 };
   let sent = 0;
   let pruned = 0;
   await Promise.all(subs.map(async (sub) => {

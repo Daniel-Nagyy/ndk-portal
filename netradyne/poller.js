@@ -61,8 +61,15 @@ function netradyneAccounts() {
       name: c.name,
       netradyneEmail: c.netradyne.email,
       netradynePassword: c.netradyne.password,
-      pollMs: Math.max(Number(c.netradyne.pollMs) || NETRADYNE.minPollMs, NETRADYNE.minPollMs),
     }));
+}
+
+// Random delay in [minPollMs, maxPollMs] so the polling cadence isn't a fixed,
+// detectable pattern (helps avoid rate-limit/ban flags).
+function nextDelay() {
+  const min = NETRADYNE.minPollMs;
+  const max = Math.max(NETRADYNE.maxPollMs || min, min);
+  return Math.floor(min + Math.random() * (max - min));
 }
 
 export function startPolling() {
@@ -75,12 +82,18 @@ export function startPolling() {
     log.info('No accounts with Netradyne credentials — polling not started');
     return;
   }
-  // Stagger initial logins so we never hit Netradyne with simultaneous auth.
+  // Each account re-schedules itself with a fresh random delay after every poll.
+  const scheduleNext = (account) => {
+    const delay = nextDelay();
+    setTimeout(async () => {
+      await pollAccount(account);
+      scheduleNext(account);
+    }, delay);
+    log.info(`[${account.id}] next Netradyne poll in ${Math.round(delay / 1000)}s`);
+  };
+  // Stagger initial starts so accounts don't all hit Netradyne at once.
   accounts.forEach((account, i) => {
-    setTimeout(() => {
-      pollAccount(account);
-      setInterval(() => pollAccount(account), account.pollMs);
-    }, i * 20000);
-    log.info(`Netradyne polling scheduled: ${account.name} every ${Math.round(account.pollMs / 1000)}s`);
+    setTimeout(() => scheduleNext(account), i * 15000 + Math.floor(Math.random() * 10000));
+    log.info(`Netradyne polling scheduled (randomized ${Math.round(NETRADYNE.minPollMs / 1000)}–${Math.round((NETRADYNE.maxPollMs || NETRADYNE.minPollMs) / 1000)}s): ${account.name}`);
   });
 }

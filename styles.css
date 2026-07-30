@@ -4704,3 +4704,14 @@ textarea.table-control {
 .truck-empty-icon { font-size: 2rem; }
 .truck-empty strong { color: var(--text); font-size: 1.05rem; }
 .truck-empty p { max-width: 360px; margin: 0; }
+
+/* Daily Recap: bigger Issues box (it holds most of the content). */
+.recap-issues-cell { min-width: 240px; }
+.recap-table .issues-box {
+  width: 100%;
+  min-width: 220px;
+  min-height: 76px;
+  resize: vertical;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}

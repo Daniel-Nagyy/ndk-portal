@@ -7,6 +7,7 @@ import { log } from './logger.js';
 
 const BASE_DIR = './netradyne-browser-data';
 const contexts = new Map(); // accountId -> persistent context (session reused across polls)
+const validatedAt = new Map(); // accountId -> ms timestamp of last successful login check
 
 function dirFor(accountId) {
   return join(BASE_DIR, accountId);
@@ -28,18 +29,25 @@ export async function getAuthenticatedContext(account) {
   // 1. Reuse an in-process context if it's still logged in.
   const existing = contexts.get(accountId);
   if (existing) {
+    // Skip the extra page-load login check if we validated recently — the scrape
+    // itself will detect a lost session and we'll re-auth then. Saves ~5s/poll.
+    const recheckMs = NETRADYNE.sessionRecheckMs || 10 * 60 * 1000;
+    if (Date.now() - (validatedAt.get(accountId) || 0) < recheckMs) {
+      return existing;
+    }
     try {
       const page = await existing.newPage();
       await page.goto(NETRADYNE.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(1000);
       const needsLogin = await page.$('#loginUserName');
       await page.close().catch(() => {});
-      if (!needsLogin) { log.info(`[${accountId}] session reused`); return existing; }
+      if (!needsLogin) { validatedAt.set(accountId, Date.now()); log.info(`[${accountId}] session reused`); return existing; }
     } catch (e) {
       log.warn(`[${accountId}] session check failed, re-authenticating`);
     }
     await existing.close().catch(() => {});
     contexts.delete(accountId);
+    validatedAt.delete(accountId);
   }
 
   // 2. Launch the persistent context. If the saved session is still valid the app
@@ -56,6 +64,7 @@ export async function getAuthenticatedContext(account) {
     }
     await page.close().catch(() => {});
     contexts.set(accountId, context);
+    validatedAt.set(accountId, Date.now());
     return context;
   } catch (err) {
     log.error(`[${accountId}] authentication failed: ${err.message}`);

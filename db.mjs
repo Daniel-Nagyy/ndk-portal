@@ -408,6 +408,31 @@ export function deleteDownTruck(id) {
   return db.prepare("DELETE FROM down_trucks WHERE id = ?").run(id).changes;
 }
 
+// Read-only snapshot of what's actually stored (for the admin DB overview page).
+export function getDbOverview() {
+  const count = (t) => {
+    try { return db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c; } catch (_) { return null; }
+  };
+  return {
+    dbPath: DB_PATH,
+    tables: {
+      accounts: count("accounts"),
+      users: count("users"),
+      sessions: count("sessions"),
+      push_subscriptions: count("push_subscriptions"),
+      recaps: count("recaps"),
+      down_trucks: count("down_trucks"),
+    },
+    accounts: listAccounts().map((a) => ({ id: a.id, name: a.name })),
+    recapsByDay: db.prepare(
+      "SELECT daily_date AS date, client_id AS account, COUNT(*) AS rows FROM recaps GROUP BY daily_date, client_id ORDER BY daily_date DESC LIMIT 30"
+    ).all(),
+    downTrucksByAccount: db.prepare(
+      "SELECT account_id AS account, COUNT(*) AS rows FROM down_trucks GROUP BY account_id"
+    ).all(),
+  };
+}
+
 export function getRecapById(id) {
   const r = db.prepare("SELECT * FROM recaps WHERE id = ?").get(id);
   return r ? { id: r.id, clientId: r.client_id, dailyDate: r.daily_date, ...JSON.parse(r.payload) } : null;

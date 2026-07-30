@@ -13,7 +13,7 @@ import {
   publicUser, getAccount, publicAccount as dbPublicAccount, listAccounts, createAccount, updateAccount, deleteAccount,
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
-  getRecaps, syncRecaps, getRecapById, deleteRecap,
+  getRecaps, syncRecaps, getRecapById, deleteRecap, getDbOverview,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
@@ -493,6 +493,13 @@ const requestHandler = (req, res) => {  // CORS Headers
       })),
     };
     return sendJson(200, { success: true, health });
+  }
+
+  // What's actually stored in the database (on the Railway volume). Superadmin.
+  if (url.pathname === '/api/admin/db-overview' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser || authUser.role !== 'superadmin') return sendJson(403, { success: false, error: 'Superadmin only' });
+    return sendJson(200, { success: true, overview: getDbOverview() });
   }
 
   if (url.pathname === '/api/push/debug' && req.method === 'GET') {
