@@ -1909,7 +1909,7 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
           </button>
           <button class="kpi-card kpi-card--trucks" type="button" data-view="truck-tracker" aria-label="View down trucks">
             <span class="kpi-icon">🔧</span>
-            <strong class="kpi-value ${downTrucks.filter((t) => (t.status || "Active") !== "Active").length > 0 ? 'kpi-amber' : 'kpi-green'}">${downTrucks.filter((t) => (t.status || "Active") !== "Active").length}</strong>
+            <strong class="kpi-value ${downTrucks.filter((t) => (t.status || "Available") === "Unavailable").length > 0 ? 'kpi-amber' : 'kpi-green'}">${downTrucks.filter((t) => (t.status || "Available") === "Unavailable").length}</strong>
             <span class="kpi-label">Down Trucks</span>
           </button>
         </div>
@@ -3014,17 +3014,16 @@ function renderRecapMobileCards(rows) {
     return user && ["dispatcher", "manager", "admin", "superadmin"].includes(user.role);
   }
 
-  const TRUCK_STATUSES = ["Active", "Unavailable", "Inactive"];
+  const TRUCK_STATUSES = ["Available", "Unavailable"];
 
   function truckStatusPill(status) {
-    const s = status || "Active";
-    const color = s === "Active" ? "green" : s === "Unavailable" ? "red" : "gray";
-    return `<span class="pill ${color}">${escapeHtml(s)}</span>`;
+    const s = status || "Available";
+    return `<span class="pill ${s === "Unavailable" ? "red" : "green"}">${escapeHtml(s)}</span>`;
   }
 
   function visibleTrucks() {
     let rows = downTrucks;
-    if (truckStatusFilter !== "all") rows = rows.filter((t) => (t.status || "Active") === truckStatusFilter);
+    if (truckStatusFilter !== "all") rows = rows.filter((t) => (t.status || "Available") === truckStatusFilter);
     return applySearch(rows, ["truckNumber", "make", "vin", "license", "owner", "issue", "woNumber", "status"]);
   }
 
@@ -3121,11 +3120,12 @@ function renderRecapMobileCards(rows) {
         : `<span>${escapeHtml(t[field] || "-")}</span>`;
     const statusCtl = editable
       ? `<select class="table-control" data-truck-field="status" data-truck-id="${t.id}">
-           ${TRUCK_STATUSES.map((s) => `<option value="${s}" ${(t.status || "Active") === s ? "selected" : ""}>${s}</option>`).join("")}
+           ${TRUCK_STATUSES.map((s) => `<option value="${s}" ${(t.status || "Available") === s ? "selected" : ""}>${s}</option>`).join("")}
          </select>`
       : truckStatusPill(t.status);
+    const unavailable = (t.status || "Available") === "Unavailable";
     return `
-      <tr>
+      <tr class="${unavailable ? "truck-row-unavailable" : ""}">
         <td class="row-number">${index}</td>
         <td class="id-cell">${inp("truckNumber")}</td>
         <td>${inp("vehicleType")}</td>
@@ -3155,10 +3155,10 @@ function renderRecapMobileCards(rows) {
             ? `<label class="truck-card-field"><span>${label}</span><input class="table-control" type="${type}" value="${escapeHtml(t[field] || "")}" data-truck-field="${field}" data-truck-id="${t.id}" /></label>`
             : `<div class="truck-card-field"><span>${label}</span><strong>${escapeHtml(t[field] || "–")}</strong></div>`;
           const statusRow = editable
-            ? `<label class="truck-card-field"><span>Status</span><select class="table-control" data-truck-field="status" data-truck-id="${t.id}">${TRUCK_STATUSES.map((s)=>`<option value="${s}" ${(t.status||"Active")===s?"selected":""}>${s}</option>`).join("")}</select></label>`
+            ? `<label class="truck-card-field"><span>Status</span><select class="table-control" data-truck-field="status" data-truck-id="${t.id}">${TRUCK_STATUSES.map((s)=>`<option value="${s}" ${(t.status||"Available")===s?"selected":""}>${s}</option>`).join("")}</select></label>`
             : `<div class="truck-card-field"><span>Status</span>${truckStatusPill(t.status)}</div>`;
           return `
-            <article class="truck-card">
+            <article class="truck-card ${(t.status || "Available") === "Unavailable" ? "truck-card-unavailable" : ""}">
               <div class="truck-card-head">
                 <strong>Truck ${escapeHtml(t.truckNumber || "—")}</strong>
                 ${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">Delete</button>` : truckStatusPill(t.status)}
@@ -3194,7 +3194,7 @@ function renderRecapMobileCards(rows) {
   async function addDownTruck(user) {
     const t = {
       id: `dt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      truckNumber: "", issue: "", woNumber: "", downDate: todayISO(), status: "Active",
+      truckNumber: "", issue: "", woNumber: "", downDate: todayISO(), status: "Available",
       vehicleType: "", ownership: "", make: "", body: "", fuel: "", owner: "", license: "", vin: "",
     };
     downTrucks.unshift(t);

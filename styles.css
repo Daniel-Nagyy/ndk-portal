@@ -4602,32 +4602,31 @@ textarea.table-control {
   .hos-mobile-cards .hos-metric { min-width: 0; }
 }
 
-/* ---- Truck Tracker: compact table + mobile cards ---- */
-/* Override the recap table's huge 2200px min-width so columns fit the panel. */
+/* ---- Truck Tracker: fleet roster table + mobile cards ---- */
+/* The fleet table carries many columns (type, make, VIN, license, status …).
+   Let it size to content and scroll horizontally rather than crushing columns. */
 .truck-table.recap-table {
-  min-width: 0 !important;
-  width: 100%;
-  table-layout: fixed;
+  min-width: 1180px;
+  width: max-content;
+  table-layout: auto;
 }
 .truck-table.recap-table th,
 .truck-table.recap-table td {
   padding: 6px 8px;
   font-size: 13px;
-  white-space: normal;
-  overflow: hidden;
+  white-space: nowrap;
 }
-/* Fixed, sensible column widths: #, Truck #, Issue (flex), Date, WO #, Status, ✕ */
-.truck-table col.c-num,    .truck-table th:nth-child(1) { width: 34px; }
-.truck-table th:nth-child(2) { width: 110px; }   /* Truck # */
-.truck-table th:nth-child(3) { width: auto; }    /* Issue takes remaining space */
-.truck-table th:nth-child(4) { width: 130px; }   /* Date */
-.truck-table th:nth-child(5) { width: 110px; }   /* WO # */
-.truck-table th:nth-child(6) { width: 120px; }   /* Status */
-.truck-table th:nth-child(7) { width: 44px; }    /* delete */
-.truck-table .table-control { width: 100%; padding: 5px 8px; font-size: 13px; min-width: 0; box-sizing: border-box; }
-.truck-table textarea.table-control { min-height: 34px; resize: vertical; }
-/* This table should never scroll sideways on desktop. */
-.truck-table-desktop .table-wrap { overflow-x: hidden; }
+.truck-table th.row-number, .truck-table td.row-number { width: 34px; text-align: center; }
+.truck-table .table-control { width: 100%; padding: 5px 8px; font-size: 13px; min-width: 90px; box-sizing: border-box; }
+.truck-table td.id-cell .table-control { min-width: 130px; }   /* truck #, license, VIN */
+.truck-table textarea.table-control { min-height: 34px; resize: vertical; min-width: 140px; }
+/* Wide roster scrolls sideways inside its own container. */
+.truck-table-desktop .table-wrap { overflow-x: auto; }
+
+/* Unavailable trucks stand out. */
+.truck-row-unavailable td { background: rgba(239,107,104,0.09); }
+.truck-row-unavailable td.row-number { box-shadow: inset 3px 0 0 var(--red); }
+.truck-card-unavailable { border-color: rgba(239,107,104,0.45); background: rgba(239,107,104,0.06); }
 
 /* Show table on desktop, cards on mobile. */
 .truck-table-desktop { display: block; }
