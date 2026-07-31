@@ -2947,9 +2947,15 @@ function renderRecapMobileCards(rows) {
     `;
   }
 
-  function makeStartingMessage(row) {
-    return `Hello ${row.driverAssigned},  Requested yard time is ${row.requestedStart}, truck ${row.truck || "TBD"}, fuel ${row.fuel || "N/A"}%. Please complete HOS pre-check and DVIR before departure.`;
-  }
+function makeStartingMessage(row) {
+  return `👋 Hello ${row.driverAssigned || "—"},
+🟢 Yard arrival time: ${row.requestedStart || "—"}
+🚛 Truck assigned: ${row.truck || "—"}
+⛽ Fuel Percentage: ${row.fuel || "—"}%
+📝 Please complete Pre-trip before departure.
+🔺 Please kindly make sure to clear the bobtail before 15 minutes of the scheduled time.
+📢 Kindly confirm receipt and notify us once you arrive at the yard. Thank you.`;
+}
 
   // Push recaps to the server right now (structural changes shouldn't wait for
   // the 2s debounce) so add/delete is durable immediately.
