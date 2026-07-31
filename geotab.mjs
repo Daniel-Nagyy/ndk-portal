@@ -405,7 +405,12 @@ function driverDisplayName(user) {
   return `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.name || user.userName || "Unknown Driver";
 }
 
-// Authenticate, fetch users, and return the active-driver list (shared by both paths).
+// Authenticate and return the exact fleet the MyGeotab "Driver Availability" page
+// shows: the drivers that have a DutyStatusAvailability record (one fleet-wide call —
+// the same entity the page renders), scoped only by the login's own Geotab data access
+// (i.e. its groups), with NO extra carrier/activity filtering. This mirrors the page
+// one-to-one. Returns each driver's User record (for the display name) plus its parsed
+// availability so the callers don't refetch it per driver.
 async function authAndActiveDrivers(credentials) {
   const server = credentials.server || DEFAULT_SERVER;
   const auth = await authenticate({
@@ -415,19 +420,63 @@ async function authAndActiveDrivers(credentials) {
     server
   });
   const geotabCredentials = auth.credentials;
-  const users = await geotabCallWithRetry("Get", { typeName: "User", credentials: geotabCredentials }, { retries: 2, delayMs: 400, server });
   const now = new Date();
+
+  const [usersRaw, availRaw] = await Promise.all([
+    geotabCallWithRetry("Get", { typeName: "User", credentials: geotabCredentials }, { retries: 2, delayMs: 400, server }),
+    geotabCallWithRetry("Get", { typeName: "DutyStatusAvailability", credentials: geotabCredentials }, { retries: 2, delayMs: 400, server }),
+  ]);
+  const users = Array.isArray(usersRaw) ? usersRaw : [];
+  const usersById = new Map(users.map((u) => [u.id, u]));
+
+  // The page's "Groups" filter shows only drivers whose driver-group membership falls
+  // within the login user's own group scope. On the shared amazon_mm_na database a
+  // driver operated by another DSP has no driver group here (e.g. Jennifer Reeves) and
+  // so is hidden from this account's Availability page — we mirror that exactly.
+  const loginUser = users.find((u) => String(u.name || "").toLowerCase() === String(credentials.username || "").toLowerCase());
+  const myGroupIds = new Set((loginUser?.companyGroups || []).map((g) => g.id));
+  const inScope = (user) => {
+    const groups = user?.driverGroups || [];
+    if (!groups.length) return false;             // no driver group → not on the page
+    if (!myGroupIds.size) return true;            // login scope unknown → don't over-filter
+    return groups.some((g) => myGroupIds.has(g.id));
+  };
+
+  const availById = new Map();
+  let drivers = [];
   const seen = new Set();
-  const drivers = (Array.isArray(users) ? users : []).filter((user) => {
-    if (!user || !user.id || !user.isDriver) return false;
-    const activeTo = user.activeTo ? safeDate(user.activeTo) : null;
-    if (activeTo && !Number.isNaN(activeTo.getTime()) && activeTo.getTime() < now.getTime()) return false;
-    const key = typeof user.id === "string" ? user.id : JSON.stringify(user.id);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return { server, geotabCredentials, drivers, now };
+  for (const row of (Array.isArray(availRaw) ? availRaw : [])) {
+    const driverId = row?.driver?.id || row?.driver;
+    if (!driverId || seen.has(driverId)) continue;
+    seen.add(driverId);
+    availById.set(driverId, parseAvailabilityItem(row));
+    drivers.push(usersById.get(driverId) || { id: driverId });
+  }
+
+  // Scope to the login's driver groups (matches the page). Never let it empty the
+  // fleet: if scoping removes everyone (e.g. a setup with no driver groups), keep all.
+  const scoped = drivers.filter((u) => inScope(u));
+  if (scoped.length) {
+    const keepIds = new Set(scoped.map((u) => u.id));
+    for (const id of [...availById.keys()]) if (!keepIds.has(id)) availById.delete(id);
+    drivers = scoped;
+  }
+
+  // Fallback: if the availability entity gave us nothing (API hiccup), revert to the
+  // active-driver User list so the fleet is never silently empty.
+  if (!drivers.length) {
+    const fallback = users.filter((user) => {
+      if (!user || !user.id || !user.isDriver) return false;
+      const activeTo = user.activeTo ? safeDate(user.activeTo) : null;
+      if (activeTo && !Number.isNaN(activeTo.getTime()) && activeTo.getTime() < now.getTime()) return false;
+      if (seen.has(user.id)) return false;
+      seen.add(user.id);
+      return true;
+    });
+    return { server, geotabCredentials, drivers: fallback, now, availById: new Map() };
+  }
+
+  return { server, geotabCredentials, drivers, now, availById };
 }
 
 function assembleReadiness(rows) {
@@ -442,12 +491,15 @@ function assembleReadiness(rows) {
 
 // --- Path A: original per-driver fetch (default; unchanged behavior) ---
 async function computeReadinessPerDriver(credentials) {
-  const { server, geotabCredentials, drivers, now } = await authAndActiveDrivers(credentials);
+  const { server, geotabCredentials, drivers, now, availById } = await authAndActiveDrivers(credentials);
   const rows = await Promise.all(drivers.map(async (user) => {
     const name = driverDisplayName(user);
     const [logsResult, availability] = await Promise.all([
       getDriverLogs(geotabCredentials, user.id, server),
-      getDriverAvailability(geotabCredentials, user.id, server)
+      // Availability already came from the fleet-wide DutyStatusAvailability fetch
+      // (the Availability page's own data); only fall back to a per-driver call in
+      // the rare User-list fallback path where availById is empty.
+      availById.has(user.id) ? Promise.resolve(availById.get(user.id)) : getDriverAvailability(geotabCredentials, user.id, server)
     ]);
     let finalLogs = logsResult.logs;
     let finalLogsError = logsResult.logsError;
@@ -478,13 +530,16 @@ async function computeReadinessPerDriver(credentials) {
 // Collapses the ~2 calls/driver into a few HTTP requests instead of hundreds,
 // which avoids Geotab's concurrent-request throttling and slashes server load.
 async function computeReadinessMulti(credentials) {
-  const { server, geotabCredentials, drivers, now } = await authAndActiveDrivers(credentials);
+  const { server, geotabCredentials, drivers, now, availById } = await authAndActiveDrivers(credentials);
   if (!drivers.length) return assembleReadiness([]);
 
   const weekAgo = new Date(now);
   weekAgo.setDate(now.getDate() - 7);
 
-  // 2 calls per driver: logs, then availability (same order for mapping back).
+  // Availability already came from the fleet-wide fetch, so we only batch the logs
+  // (1 call/driver). Availability is re-fetched here only in the User-list fallback
+  // path where availById is empty.
+  const needAvail = availById.size === 0;
   const calls = [];
   for (const user of drivers) {
     calls.push({ method: "Get", params: {
@@ -492,11 +547,14 @@ async function computeReadinessMulti(credentials) {
       search: { fromDate: weekAgo.toISOString(), toDate: now.toISOString(), userSearch: { id: user.id } },
       resultsLimit: 500,
     } });
-    calls.push({ method: "Get", params: {
-      typeName: "DutyStatusAvailability", credentials: geotabCredentials,
-      search: { userSearch: { id: user.id } },
-    } });
+    if (needAvail) {
+      calls.push({ method: "Get", params: {
+        typeName: "DutyStatusAvailability", credentials: geotabCredentials,
+        search: { userSearch: { id: user.id } },
+      } });
+    }
   }
+  const perDriver = needAvail ? 2 : 1;
 
   const BATCH = Number(process.env.GEOTAB_MULTICALL_BATCH || 40); // calls per multicall
   const results = [];
@@ -509,14 +567,17 @@ async function computeReadinessMulti(credentials) {
 
   const rows = drivers.map((user, idx) => {
     const name = driverDisplayName(user);
-    const logsRaw = results[idx * 2];
-    const availRaw = results[idx * 2 + 1];
+    const logsRaw = results[idx * perDriver];
     let finalLogs = Array.isArray(logsRaw) ? logsRaw : [];
     finalLogs = finalLogs.filter((log) => {
       const logTime = new Date(log.dateTime).getTime();
       return !isNaN(logTime) && (now.getTime() - logTime <= MAX_LOG_AGE_MS);
     });
-    const availability = (Array.isArray(availRaw) && availRaw.length) ? parseAvailabilityItem(availRaw[0]) : emptyAvailability();
+    let availability = availById.get(user.id);
+    if (!availability) {
+      const availRaw = needAvail ? results[idx * perDriver + 1] : null;
+      availability = (Array.isArray(availRaw) && availRaw.length) ? parseAvailabilityItem(availRaw[0]) : emptyAvailability();
+    }
     return finalizeDriverRecord(user, name, finalLogs, null, availability, availability.availabilityError || null, now);
   });
   return assembleReadiness(rows);
