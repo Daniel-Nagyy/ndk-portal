@@ -4711,6 +4711,12 @@ textarea.table-control {
   width: 100%;
   min-width: 220px;
   min-height: 76px;
+  /* Grow to fit content so a full note is visible without an inner scrollbar.
+     field-sizing handles this natively in Chromium; the JS fallback (autoGrow)
+     covers browsers without it. */
+  field-sizing: content;
+  max-height: none;
+  overflow: hidden;
   resize: vertical;
   line-height: 1.35;
   white-space: pre-wrap;

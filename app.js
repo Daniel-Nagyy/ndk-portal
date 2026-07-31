@@ -911,6 +911,14 @@ function renderNetradyneDashboard(user) {
     }
   }
 
+  // Grow a textarea to fit its content (fallback for browsers without CSS
+  // field-sizing). Resets height first so it can shrink when text is deleted.
+  function autoGrowTextarea(el) {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }
+
   function render() {
     const user = getCurrentUser();
     if (!user) {
@@ -988,6 +996,9 @@ function renderNetradyneDashboard(user) {
         try { if (el.setSelectionRange && focusInfo.start != null) el.setSelectionRange(focusInfo.start, focusInfo.end); } catch (_) {}
       }
     }
+
+    // Size the auto-growing Issues boxes to their existing content.
+    document.querySelectorAll(".issues-box").forEach(autoGrowTextarea);
 
     queueOwnerHosNotifications(user);
     if (ownerHosPreserveSearchFocus && currentView === "owner-hos") {
@@ -2625,7 +2636,7 @@ function renderRecapPage(user) {
               <th>Requested Start</th>
               <th>Stop 1 upcoming</th>
               <th>Scheduled Final</th>
-              <th>HOS Check</th>
+              <th>Start Message Sent</th>
               <th>Late First Stop?</th>
               <th>Issues / Comments</th>
               <th>Starting Message</th>
@@ -2687,7 +2698,7 @@ function renderRecapMobileCards(rows) {
               ${field('Requested Start', row.requestedStart)}
               ${field('Stop 1 upcoming', row.stopOneupcoming)}
               ${field('Scheduled Final', row.scheduledFinal)}
-              ${field('HOS Check', row.hosCheck)}
+              ${field('Start Message Sent', row.startMessageSent ? 'Yes' : 'No')}
               ${field('Late First Stop', row.lateFirstStop ? 'Yes' : 'No')}
               ${field('Issues', row.issues || 'None')}
             </div>
@@ -2716,7 +2727,7 @@ function renderRecapMobileCards(rows) {
         <td>${control("requestedStart")}</td>
         <td>${control("stopOneupcoming")}</td>
         <td>${control("scheduledFinal")}</td>
-        <td>${editable ? renderSelectControl(row, "hosCheck", ["HOS - Shift Pre Check", "30 Minutes Completed", "Break upcoming", "HOS Risk"]) : `<span class="pill green">${escapeHtml(row.hosCheck)}</span>`}</td>
+        <td class="start-msg-cell">${editable ? `<input class="toggle" type="checkbox" data-recap-field="startMessageSent" data-recap-id="${row.id}" ${row.startMessageSent ? "checked" : ""} />` : row.startMessageSent ? `<span class="pill green">Sent</span>` : `<span class="pill gray">No</span>`}</td>
         <td>${editable ? `<input class="toggle" type="checkbox" data-recap-field="lateFirstStop" data-recap-id="${row.id}" ${row.lateFirstStop ? "checked" : ""} />` : row.lateFirstStop ? `<span class="pill red">Yes</span>` : `<span class="pill gray">No</span>`}</td>
         <td class="recap-issues-cell ${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control issues-box" rows="4" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
         <td>${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="copy-starting-message" data-recap-id="${row.id}">Copy message</button>` : "—"}</td>
@@ -2885,7 +2896,7 @@ function renderRecapMobileCards(rows) {
       requestedStart: "",
       stopOneupcoming: "",
       scheduledFinal: "",
-      hosCheck: "HOS - Shift Pre Check",
+      startMessageSent: false,
       lateFirstStop: false,
       issues: "",
     };
@@ -2919,44 +2930,51 @@ function renderRecapMobileCards(rows) {
   // Open a clean, printable page of the current day's recap (PDF via the print dialog).
   function exportRecapPrintable(user) {
     const rows = visibleRecaps(user);
+    // [label, value fn, column class]. "wrap" columns hold long text and are allowed
+    // to wrap onto multiple lines; everything else stays on one line so short values
+    // (dates, times, IDs) don't get squeezed into a vertical stack of characters.
     const cols = [
-      ["#", (r, i) => i + 1],
-      ["Driver", (r) => r.driverAssigned],
-      ["Trip Date", (r) => r.tripDate],
-      ["Status", (r) => r.status],
-      ["Trip ID", (r) => r.tripId],
-      ["Block ID", (r) => r.blockId],
-      ["VRIDs", (r) => (Array.isArray(r.vrids) ? r.vrids.join(", ") : "")],
-      ["Solo", (r) => r.solo],
-      ["Truck", (r) => r.truck],
-      ["Fuel", (r) => r.fuel],
-      ["On Duty", (r) => r.onDuty],
-      ["Requested Start", (r) => r.requestedStart],
-      ["Stop 1", (r) => r.stopOneupcoming],
-      ["Scheduled Final", (r) => r.scheduledFinal],
-      ["HOS Check", (r) => r.hosCheck],
-      ["Late 1st?", (r) => (r.lateFirstStop ? "Yes" : "No")],
-      ["Issues / Comments", (r) => r.issues],
+      ["#", (r, i) => i + 1, "col-num"],
+      ["Driver", (r) => r.driverAssigned, "wrap col-driver"],
+      ["Trip Date", (r) => r.tripDate, ""],
+      ["Status", (r) => r.status, ""],
+      ["Trip ID", (r) => r.tripId, ""],
+      ["Block ID", (r) => r.blockId, ""],
+      ["VRIDs", (r) => (Array.isArray(r.vrids) ? r.vrids.join(", ") : ""), "wrap col-vrids"],
+      ["Solo", (r) => r.solo, ""],
+      ["Truck", (r) => r.truck, ""],
+      ["Fuel", (r) => r.fuel, ""],
+      ["On Duty", (r) => r.onDuty, ""],
+      ["Requested Start", (r) => r.requestedStart, ""],
+      ["Stop 1", (r) => r.stopOneupcoming, ""],
+      ["Scheduled Final", (r) => r.scheduledFinal, ""],
+      ["Start Msg Sent", (r) => (r.startMessageSent ? "Yes" : "No"), "col-num"],
+      ["Late 1st?", (r) => (r.lateFirstStop ? "Yes" : "No"), "col-num"],
+      ["Issues / Comments", (r) => r.issues, "wrap col-issues"],
     ];
     const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const head = cols.map(([label]) => `<th>${esc(label)}</th>`).join("");
+    const head = cols.map(([label, , cls]) => `<th class="${cls}">${esc(label)}</th>`).join("");
     const body = rows
-      .map((r, i) => `<tr>${cols.map(([, fn]) => `<td>${esc(fn(r, i))}</td>`).join("")}</tr>`)
+      .map((r, i) => `<tr>${cols.map(([, fn, cls]) => `<td class="${cls}">${esc(fn(r, i))}</td>`).join("")}</tr>`)
       .join("");
     const title = `Daily Recap — ${formatDateLabel(selectedRecapDate)}`;
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
       <style>
         body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111}
         h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:16px}
-        table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}
-        /* Wrap long text so nothing overflows/breaks the layout, keep newlines. */
-        th,td{border:1px solid #bbb;padding:4px 6px;text-align:left;vertical-align:top;
-              word-break:break-word;overflow-wrap:anywhere;white-space:pre-wrap}
-        /* Issues / Comments (last column) gets the most room since it holds the most. */
-        th:last-child,td:last-child{width:28%}
+        /* Auto layout: each column sizes to its content instead of being forced equal. */
+        table{width:100%;border-collapse:collapse;font-size:10px;table-layout:auto}
+        th,td{border:1px solid #bbb;padding:3px 5px;text-align:left;vertical-align:top;white-space:nowrap}
+        /* Only the long free-text columns wrap; keep newlines. */
+        th.wrap,td.wrap{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+        .col-num{width:1%;text-align:center}
+        .col-driver{max-width:110px}
+        .col-hos{max-width:80px}
+        .col-vrids{min-width:110px;max-width:170px}
+        .col-issues{min-width:150px}
         th{background:#f0f0f0} tr:nth-child(even) td{background:#fafafa}
         tr{break-inside:avoid}
-        @media print{@page{size:landscape;margin:10mm}}
+        @media print{@page{size:landscape;margin:8mm}}
       </style></head><body>
       <h1>${esc(title)}</h1>
       <div class="sub">${rows.length} rows · generated ${esc(formatDateForSelectedTimeZone(new Date().toISOString()))} ET</div>
@@ -4338,6 +4356,7 @@ case "hos-close-filters":
       const row = state.recaps.find((item) => item.id === recapField.dataset.recapId);
       if (!row) return;
       const field = recapField.dataset.recapField;
+      if (recapField.classList.contains("issues-box")) autoGrowTextarea(recapField);
       if (field === "vrids") {
         // All VRIDs, freely editable — split on newlines/commas, keep every one.
         row.vrids = recapField.value.split(/[\n,]+/).map((v) => v.trim()).filter(Boolean);
@@ -4650,7 +4669,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
           onDuty: existing.onDuty,
           finalArrivalHome: existing.finalArrivalHome,
           driverLogOff: existing.driverLogOff,
-          hosCheck: existing.hosCheck,
+          startMessageSent: existing.startMessageSent,
           lateFirstStop: existing.lateFirstStop,
           issues: existing.issues,
           bol: existing.bol,
@@ -4780,7 +4799,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
         scheduledFinal: latestFinal?.time || "",
         finalArrivalHome: "",
         driverLogOff: "",
-        hosCheck: "HOS - Shift Pre Check",
+        startMessageSent: false,
         lateFirstStop: false,
         issues: "",
         bol: "Pending",
