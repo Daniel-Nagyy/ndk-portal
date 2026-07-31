@@ -10,8 +10,8 @@ role-based web app, and pushes real-time alerts to phones.
 
 ## 1. What the system does (functional overview)
 
-The portal serves several **accounts** (one per DSP client, e.g. "Portable",
-"Mako Waves Distribution"). Each account has its own users, its own integration
+The portal serves several **accounts** (one per DSP client, e.g. "MGI
+Transportation"). Each account has its own users, its own integration
 credentials, and its own alerts. Data never crosses accounts.
 
 **Core capabilities:**
@@ -65,7 +65,7 @@ datacenter IP risks bans. The system solves this by splitting responsibilities:
 Every account row has an `api_key`. Every user, push subscription, recap, and
 down-truck row carries an `account_id`/`client_id`. All reads/writes are filtered
 by the logged-in user's account (superadmin/admin can see all). This is what
-guarantees Freedom's alerts never reach Portable's phones.
+guarantees one account's alerts never reach another account's phones.
 
 ---
 
@@ -148,7 +148,7 @@ guarantees Freedom's alerts never reach Portable's phones.
 
 ### Scripts (`scripts/`)
 One-off provisioning/maintenance run against the production DB
-(`create-freedom.mjs`, `clear-recaps.mjs`).
+(e.g. `keep-only.mjs`, `verify-geotab.mjs`).
 
 ---
 

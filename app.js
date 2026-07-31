@@ -257,7 +257,8 @@ async function pollNetradyneAlerts() {
     if (res.ok) {
       const data = await res.json();
       if (data.success) {
-        netradyneAlerts = data.alerts || [];
+        // Never surface positive/recognition events on the portal — risk only.
+        netradyneAlerts = (data.alerts || []).filter((a) => a.severity !== 'Positive');
         if (currentView === 'netradyne-dashboard') render();
       }
     }
@@ -283,7 +284,7 @@ function processHosItems(items) {
 
     return {
       id: `hos-ext-${index}`,
-      clientId: "makowaves-logistics",
+      clientId: getCurrentUser()?.clientId || null,
       driverName: item.driverName,
       vehicle: item.vehicle,
       status: normalizeHosStatusInput(item.status),
@@ -3529,7 +3530,7 @@ function renderRecapMobileCards(rows) {
         <div class="form-grid">
           <div class="field wide">
             <label>Account name</label>
-            <input name="name" ${editing ? "" : "required"} placeholder="Freedom" value="${editing ? v(editing.name) : ""}" />
+            <input name="name" ${editing ? "" : "required"} placeholder="Company name" value="${editing ? v(editing.name) : ""}" />
           </div>
           <div class="field">
             <label>Geotab database</label>

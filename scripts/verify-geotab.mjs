@@ -3,7 +3,7 @@
 import { getAccountCredentials } from "../db.mjs";
 import { computeReadiness } from "../geotab.mjs";
 
-const ACCOUNT = process.argv[2] || "mako-waves-distribution";
+const ACCOUNT = process.argv[2] || "mgi-transportation";
 const c = getAccountCredentials(ACCOUNT);
 if (!c || !c.geotab || !c.geotab.username || !c.geotab.password) {
   console.error(`No Geotab credentials for account "${ACCOUNT}"`);

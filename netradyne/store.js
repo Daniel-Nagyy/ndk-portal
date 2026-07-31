@@ -7,6 +7,15 @@ export function getAlerts(accountId) {
   return accountId ? alerts.filter(a => a.accountId === accountId) : alerts;
 }
 
+// Drop any stored alert whose account no longer exists (e.g. after an account is
+// deleted). Keeps the superadmin "all accounts" view from showing ghost data.
+export function pruneToAccounts(validAccountIds) {
+  const valid = new Set(validAccountIds);
+  for (let i = alerts.length - 1; i >= 0; i--) {
+    if (!valid.has(alerts[i].accountId)) alerts.splice(i, 1);
+  }
+}
+
 export function updateAlertStatus(id, newStatus) {
   const alert = alerts.find(a => a.id === id);
   if (alert) {

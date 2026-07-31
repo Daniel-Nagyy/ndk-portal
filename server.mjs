@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";import { extname, join, normalize } from 
 import dotenv from "dotenv";
 import { processHosTelegramAlerts, sendTelegramMessage } from "./hos-alerts.mjs";
 import { startPolling, getNetradyneStatus } from './netradyne/poller.js';
-import { getAlerts, updateAlertStatus } from './netradyne/store.js';
+import { getAlerts, updateAlertStatus, pruneToAccounts } from './netradyne/store.js';
 import { getAuthenticatedContext } from './netradyne/auth.js';
 import { pushConfigured, getVapidPublicKey, removeSubscription, subscriptionCount } from './push.mjs';
 import {
@@ -923,6 +923,8 @@ const requestHandler = (req, res) => {  // CORS Headers
   // ---------- Netradyne API (account-scoped) ----------
   if (url.pathname === '/api/netradyne/alerts' && req.method === 'GET') {
     const authUser = getAuthUser(req);
+    // Drop alerts for any deleted account so ghost data never shows.
+    pruneToAccounts(listAccounts().map((a) => a.id));
     // superadmin sees all; account users see only their account's alerts.
     const scope = authUser && authUser.role !== 'superadmin' ? authUser.account_id : null;
     const alerts = getAlerts(scope);
@@ -933,6 +935,7 @@ const requestHandler = (req, res) => {  // CORS Headers
 
   if (url.pathname === '/api/netradyne/summary' && req.method === 'GET') {
     const authUser = getAuthUser(req);
+    pruneToAccounts(listAccounts().map((a) => a.id));
     const scope = authUser && authUser.role !== 'superadmin' ? authUser.account_id : null;
     const alerts = getAlerts(scope);
     const now = new Date();

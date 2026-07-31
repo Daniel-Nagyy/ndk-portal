@@ -72,28 +72,50 @@ function nextDelay() {
   return Math.floor(min + Math.random() * (max - min));
 }
 
+const scheduled = new Set(); // accountIds with an active poll loop
+
 export function startPolling() {
   if (process.env.NETRADYNE_ENABLED === '0') {
     log.info('Netradyne polling disabled (NETRADYNE_ENABLED=0)');
     return;
   }
-  const accounts = netradyneAccounts();
-  if (!accounts.length) {
-    log.info('No accounts with Netradyne credentials — polling not started');
-    return;
-  }
-  // Each account re-schedules itself with a fresh random delay after every poll.
-  const scheduleNext = (account) => {
-    const delay = nextDelay();
-    setTimeout(async () => {
+
+  // Start a self-rescheduling loop for one account. The loop re-reads the current
+  // account list every cycle, so credential changes are picked up and a deleted
+  // account stops polling on its own.
+  const startLoop = (id, initialDelay) => {
+    if (scheduled.has(id)) return;
+    scheduled.add(id);
+    const loop = async () => {
+      if (!scheduled.has(id)) return;
+      const account = netradyneAccounts().find((a) => a.id === id);
+      if (!account) { scheduled.delete(id); log.info(`[${id}] account gone — Netradyne polling stopped`); return; }
       await pollAccount(account);
-      scheduleNext(account);
-    }, delay);
-    log.info(`[${account.id}] next Netradyne poll in ${Math.round(delay / 1000)}s`);
+      if (scheduled.has(id)) {
+        const delay = nextDelay();
+        setTimeout(loop, delay);
+        log.info(`[${id}] next Netradyne poll in ${Math.round(delay / 1000)}s`);
+      }
+    };
+    setTimeout(loop, initialDelay);
   };
-  // Stagger initial starts so accounts don't all hit Netradyne at once.
-  accounts.forEach((account, i) => {
-    setTimeout(() => scheduleNext(account), i * 15000 + Math.floor(Math.random() * 10000));
-    log.info(`Netradyne polling scheduled (randomized ${Math.round(NETRADYNE.minPollMs / 1000)}–${Math.round((NETRADYNE.maxPollMs || NETRADYNE.minPollMs) / 1000)}s): ${account.name}`);
-  });
+
+  // Reconcile the running loops against the current account list. Runs at startup
+  // and periodically, so accounts added/removed while the server is up are picked
+  // up WITHOUT a restart (previously the account list was snapshotted once at boot).
+  const reconcile = () => {
+    const accounts = netradyneAccounts();
+    const currentIds = new Set(accounts.map((a) => a.id));
+    for (const id of scheduled) if (!currentIds.has(id)) scheduled.delete(id); // stop removed
+    accounts.forEach((account, i) => {
+      if (scheduled.has(account.id)) return;
+      // Stagger new loops so accounts don't all hit Netradyne at once.
+      startLoop(account.id, i * 15000 + Math.floor(Math.random() * 10000));
+      log.info(`Netradyne polling scheduled (randomized ${Math.round(NETRADYNE.minPollMs / 1000)}–${Math.round((NETRADYNE.maxPollMs || NETRADYNE.minPollMs) / 1000)}s): ${account.name}`);
+    });
+    if (!accounts.length) log.info('No accounts with Netradyne credentials — waiting');
+  };
+
+  reconcile();
+  setInterval(reconcile, 60000);
 }

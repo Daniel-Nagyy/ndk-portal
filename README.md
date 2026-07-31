@@ -16,7 +16,7 @@ Then visit `http://127.0.0.1:4173/`.
 
 - Admin: `manager@ndk-dispatch.com` / `admin123`
 - Dispatcher: `dispatcher@ndk-dispatch.com` / `dispatch123`
-- Owner: `owner@makowaveslogistics.com` / `owner123`
+- Owner: `owner@example.com` / `owner123`
 
 ## HOS alerts (owner)
 

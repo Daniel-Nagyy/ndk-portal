@@ -5,6 +5,10 @@ export const NETRADYNE = {
   url: 'https://idms.netradyne.com/console/#/alerts',
   loginUrl: 'https://idms.netradyne.com',
   timeRange: 'Last 12 Hours',
+  // The alerts board defaults to "calendar today", which drops last-night's events
+  // early in the morning. We rewrite alertsDataLite to a rolling window this many
+  // hours wide so the scrape always reflects the same span the UI's "Last 12 Hours".
+  alertWindowHours: Number(process.env.NETRADYNE_ALERT_WINDOW_HOURS) || 12,
   maxRetries: 3,
   // Randomized poll window to avoid a fixed, bot-like pattern: each poll waits a
   // random time between minPollMs and maxPollMs (default 2–4 min).

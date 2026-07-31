@@ -31,6 +31,24 @@ export async function scrapeAlerts(context) {
   const alertPayloads = [];
   const alertTypeMap = {}; // event_code -> { desc, sev, type }
 
+  // The board's default alertsDataLite request is scoped to "calendar today",
+  // which misses events from earlier (e.g. last night) when polled in the morning.
+  // Intercept the page's OWN authenticated request and widen its date window to a
+  // rolling `alertWindowHours` span — the page's auth headers are preserved, so
+  // this is far more robust than driving the UI's date picker.
+  const windowHours = NETRADYNE.alertWindowHours || 12;
+  await page.route(ALERTS_API_RE, (route) => {
+    try {
+      const u = new URL(route.request().url());
+      const end = Math.floor(Date.now() / 1000);
+      u.searchParams.set('end_date', String(end));
+      u.searchParams.set('start_date', String(end - windowHours * 3600));
+      route.continue({ url: u.toString() });
+    } catch (_) {
+      route.continue();
+    }
+  });
+
   page.on('response', async (resp) => {
     const url = resp.url();
     if (ALERTS_API_RE.test(url)) {
@@ -85,8 +103,13 @@ export async function scrapeAlerts(context) {
       };
     });
 
-    log.info(`Collected ${alerts.length} alerts (severity from alert-type config)`);
-    return alerts;
+    // Positive/recognition events (Star driver, green-zone, etc.) are good news.
+    // Drop them at the source so they are never stored, shown on the portal, or
+    // notified — the portal must surface risk only, never positive alerts.
+    const risky = alerts.filter((a) => a.severity !== 'Positive');
+    const droppedPositive = alerts.length - risky.length;
+    log.info(`Collected ${risky.length} risk alerts (dropped ${droppedPositive} positive; severity from alert-type config)`);
+    return risky;
   } finally {
     await page.close().catch(() => {});
   }
