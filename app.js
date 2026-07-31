@@ -2981,8 +2981,12 @@ function renderRecapMobileCards(rows) {
       <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
       </body></html>`;
 
-    // Print through a hidden iframe so the user never leaves the app (opening a
-    // new tab on mobile traps them there). The iframe is removed after printing.
+    printHtmlDocument(html);
+  }
+
+  // Print an HTML document through a hidden iframe so the user never leaves the app
+  // (opening a new tab on mobile traps them there). The iframe is removed afterward.
+  function printHtmlDocument(html) {
     const frame = document.createElement("iframe");
     frame.style.position = "fixed";
     frame.style.right = "0";
@@ -2999,13 +3003,57 @@ function renderRecapMobileCards(rows) {
       } catch (_) {
         showToast("Could not open the print dialog.");
       }
-      // Give the print dialog time to grab the content, then remove the iframe.
       setTimeout(cleanup, 1500);
     };
     const doc = frame.contentWindow.document;
     doc.open();
     doc.write(html);
     doc.close();
+  }
+
+  // Printable/exportable fleet roster — same look as the recap export.
+  function exportTruckPrintable() {
+    const trucks = visibleTrucks();
+    const cols = [
+      ["#", (t, i) => i + 1, "col-num"],
+      ["Truck #", (t) => t.truckNumber, ""],
+      ["Type", (t) => t.vehicleType, ""],
+      ["Ownership", (t) => t.ownership, ""],
+      ["Make", (t) => t.make, ""],
+      ["Body", (t) => t.body, ""],
+      ["Fuel", (t) => t.fuel, ""],
+      ["Owner", (t) => t.owner, ""],
+      ["License", (t) => t.license, ""],
+      ["VIN", (t) => t.vin, ""],
+      ["Status", (t) => t.status || "Available", ""],
+      ["Issue", (t) => t.issue, "wrap col-issues"],
+      ["WO #", (t) => t.woNumber, ""],
+    ];
+    const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const head = cols.map(([label, , cls]) => `<th class="${cls}">${esc(label)}</th>`).join("");
+    const body = trucks
+      .map((t, i) => `<tr class="${(t.status || "Available") === "Unavailable" ? "row-unavail" : ""}">${cols.map(([, fn, cls]) => `<td class="${cls}">${esc(fn(t, i))}</td>`).join("")}</tr>`)
+      .join("");
+    const title = "Truck Tracker — Fleet";
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <style>
+        body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111}
+        h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:16px}
+        table{width:100%;border-collapse:collapse;font-size:10px;table-layout:auto}
+        th,td{border:1px solid #bbb;padding:3px 5px;text-align:left;vertical-align:top;white-space:nowrap}
+        th.wrap,td.wrap{white-space:pre-wrap;overflow-wrap:break-word}
+        .col-num{width:1%;text-align:center}
+        .col-issues{min-width:150px;max-width:280px}
+        th{background:#f0f0f0} tr:nth-child(even) td{background:#fafafa}
+        tr.row-unavail td{background:#fde8e8}
+        tr{break-inside:avoid}
+        @media print{@page{size:landscape;margin:8mm}}
+      </style></head><body>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${trucks.length} trucks · generated ${esc(formatDateForSelectedTimeZone(new Date().toISOString()))} ET</div>
+      <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+      </body></html>`;
+    printHtmlDocument(html);
   }
 
   // ---------- Truck Tracker (down trucks) — DB-backed only ----------
@@ -3038,6 +3086,7 @@ function renderRecapMobileCards(rows) {
           <p>Fleet assets — make, VIN, status, plus issue and work order (WO).</p>
         </div>
         <div class="actions-row">
+          ${downTrucks.length ? `<button class="btn btn-secondary" type="button" data-action="truck-print">Export / Print</button>` : ""}
           ${editable ? `<button class="btn btn-primary" type="button" data-action="truck-add-row">+ Add truck</button>` : ""}
         </div>
       </div>`;
@@ -4259,6 +4308,9 @@ case "hos-close-filters":
         break;
       case "recap-print":
         exportRecapPrintable(user);
+        break;
+      case "truck-print":
+        exportTruckPrintable();
         break;
       case "refresh-data":
         await refreshAllData(true);
