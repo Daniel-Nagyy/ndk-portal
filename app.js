@@ -1440,12 +1440,12 @@ const minutes = parseDisplayToMinutes(displayValue, maxMinutes);    const hasVal
       const cycleMinutes = parseDisplayToMinutes(driver.cycleRemainingDisplay);
       return driver.readiness === "READY" && Number.isFinite(cycleMinutes) && cycleMinutes >= 14 * 60;
     }).length;
-    const ready28 = (drivers || []).filter(driver => {
+    const ready70 = (drivers || []).filter(driver => {
       const cycleMinutes = parseDisplayToMinutes(driver.cycleRemainingDisplay);
-      return driver.readiness === "READY" && Number.isFinite(cycleMinutes) && cycleMinutes >= 28 * 60;
+      return driver.readiness === "READY" && Number.isFinite(cycleMinutes) && cycleMinutes >= 70 * 60;
     }).length;
     const reset10 = (drivers || []).filter(driver => driver.readiness === "NOT READY").length;
-    return { ready14, ready28, reset10 };
+    return { ready14, ready70, reset10 };
   }
 
   function readinessPillClass(readiness) {
@@ -1671,7 +1671,7 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
       let matchesReadiness = true;
       const cycleMinutes = parseDisplayToMinutes(driver.cycleRemainingDisplay);
       if (ownerHosQuickReadiness === "READY14") matchesReadiness = driver.readiness === "READY" && Number.isFinite(cycleMinutes) && cycleMinutes >= 14 * 60;
-      else if (ownerHosQuickReadiness === "READY28") matchesReadiness = driver.readiness === "READY" && Number.isFinite(cycleMinutes) && cycleMinutes >= 28 * 60;
+      else if (ownerHosQuickReadiness === "READY70") matchesReadiness = driver.readiness === "READY" && Number.isFinite(cycleMinutes) && cycleMinutes >= 70 * 60;
       else if (ownerHosQuickReadiness === "RESET10") matchesReadiness = driver.readiness === "NOT READY";
       else if (ownerHosQuickReadiness === "NOLOGS") matchesReadiness = driver.readiness === "NO LOGS";
       else if (ownerHosQuickReadiness === "ONDUTY") matchesReadiness = driver.currentStatus === "ON" || driver.currentStatus === "D";
@@ -1984,12 +1984,12 @@ const summaryHTML = `
       <strong class="hos-stat-value">${escapeHtml(totalDrivers)}</strong>
     </button>
     <button type="button" class="hos-stat-card hos-stat-card--green${ownerHosQuickReadiness === "READY14" ? " active" : ""}" data-readiness="READY14">
-      <span class="hos-stat-label">Ready 14+</span>
+      <span class="hos-stat-label">Available 14+</span>
       <strong class="hos-stat-value">${escapeHtml(summary.ready14)}</strong>
     </button>
-    <button type="button" class="hos-stat-card hos-stat-card--green${ownerHosQuickReadiness === "READY28" ? " active" : ""}" data-readiness="READY28">
-      <span class="hos-stat-label">Ready 28+</span>
-      <strong class="hos-stat-value">${escapeHtml(summary.ready28)}</strong>
+    <button type="button" class="hos-stat-card hos-stat-card--green${ownerHosQuickReadiness === "READY70" ? " active" : ""}" data-readiness="READY70">
+      <span class="hos-stat-label">Available 70+</span>
+      <strong class="hos-stat-value">${escapeHtml(summary.ready70)}</strong>
     </button>
     <button type="button" class="hos-stat-card hos-stat-card--red${atRiskCount > 0 ? " has-alert" : ""}${ownerHosQuickReadiness === "ONDUTY" ? " active" : ""}" data-readiness="ONDUTY">
       <span class="hos-stat-label">On Duty Now</span>
@@ -2017,12 +2017,12 @@ const summaryHTML = `
           <strong class="hos-stat-value">${escapeHtml(totalDrivers)}</strong>
         </button>
         <button type="button" class="hos-stat-card hos-stat-card--green${ownerHosQuickReadiness === "READY14" ? " active" : ""}" data-readiness="READY14">
-          <span class="hos-stat-label">Ready 14+</span>
+          <span class="hos-stat-label">Available 14+</span>
           <strong class="hos-stat-value">${escapeHtml(summary.ready14)}</strong>
         </button>
-        <button type="button" class="hos-stat-card hos-stat-card--green${ownerHosQuickReadiness === "READY28" ? " active" : ""}" data-readiness="READY28">
-          <span class="hos-stat-label">Ready 28+</span>
-          <strong class="hos-stat-value">${escapeHtml(summary.ready28)}</strong>
+        <button type="button" class="hos-stat-card hos-stat-card--green${ownerHosQuickReadiness === "READY70" ? " active" : ""}" data-readiness="READY70">
+          <span class="hos-stat-label">Available 70+</span>
+          <strong class="hos-stat-value">${escapeHtml(summary.ready70)}</strong>
         </button>
         <button type="button" class="hos-stat-card hos-stat-card--red${atRiskCount > 0 ? " has-alert" : ""}${ownerHosQuickReadiness === "ONDUTY" ? " active" : ""}" data-readiness="ONDUTY">
           <span class="hos-stat-label">On Duty Now</span>
@@ -2629,7 +2629,7 @@ function renderRecapPage(user) {
               <th>Trip ID</th>
               <th>Block ID</th>
               <th>VRIDs</th>
-              <th>Solo 1 - Solo 2</th>
+              <th>Solo 1 - Solo 5</th>
               <th>Truck</th>
               <th>Fuel</th>
               <th>On Duty Time</th>
@@ -2720,7 +2720,7 @@ function renderRecapMobileCards(rows) {
         <td class="id-cell">${control("tripId")}</td>
         <td class="id-cell">${control("blockId")}</td>
         <td class="vrids">${renderVrids(row, editable)}</td>
-        <td>${editable ? renderSelectControl(row, "solo", ["Solo 1", "Solo 2"]) : `<span class="pill blue">${escapeHtml(row.solo)}</span>`}</td>
+        <td>${editable ? renderSelectControl(row, "solo", ["Solo 1", "Solo 5"]) : `<span class="pill blue">${escapeHtml(row.solo)}</span>`}</td>
         <td class="${missing.includes("truck") ? "cell-required" : ""}">${control("truck")}</td>
         <td class="${missing.includes("fuel") ? "cell-required" : ""}">${control("fuel")}</td>
         <td class="${missing.includes("onDuty") ? "cell-required" : ""}">${control("onDuty")}</td>
@@ -2965,13 +2965,14 @@ function renderRecapMobileCards(rows) {
         /* Auto layout: each column sizes to its content instead of being forced equal. */
         table{width:100%;border-collapse:collapse;font-size:10px;table-layout:auto}
         th,td{border:1px solid #bbb;padding:3px 5px;text-align:left;vertical-align:top;white-space:nowrap}
-        /* Only the long free-text columns wrap; keep newlines. */
-        th.wrap,td.wrap{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+        /* Only the long free-text columns wrap; keep newlines. overflow-wrap:break-word
+           breaks a word only when it would overflow, WITHOUT letting the column collapse
+           to one character wide (which "anywhere"/word-break did to the Driver column). */
+        th.wrap,td.wrap{white-space:pre-wrap;overflow-wrap:break-word}
         .col-num{width:1%;text-align:center}
-        .col-driver{max-width:110px}
-        .col-hos{max-width:80px}
-        .col-vrids{min-width:110px;max-width:170px}
-        .col-issues{min-width:150px}
+        .col-driver{min-width:78px;max-width:110px}
+        .col-vrids{max-width:120px}
+        .col-issues{min-width:150px;max-width:280px}
         th{background:#f0f0f0} tr:nth-child(even) td{background:#fafafa}
         tr{break-inside:avoid}
         @media print{@page{size:landscape;margin:8mm}}
@@ -4897,7 +4898,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       .map((row) => `${csvValue(row, "Truck Filter")} ${csvValue(row, "Transit Operator Type")}`)
       .join(" ")
       .toLowerCase();
-    if (joined.includes("solo2") || joined.includes("team")) return "Solo 2";
+    if (joined.includes("solo5") || joined.includes("solo2") || joined.includes("team")) return "Solo 5";
     return "Solo 1";
   }
 
