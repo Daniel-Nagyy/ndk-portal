@@ -1909,7 +1909,7 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
           </button>
           <button class="kpi-card kpi-card--trucks" type="button" data-view="truck-tracker" aria-label="View down trucks">
             <span class="kpi-icon">🔧</span>
-            <strong class="kpi-value ${downTrucks.length > 0 ? 'kpi-amber' : 'kpi-green'}">${downTrucks.length}</strong>
+            <strong class="kpi-value ${downTrucks.filter((t) => (t.status || "Active") !== "Active").length > 0 ? 'kpi-amber' : 'kpi-green'}">${downTrucks.filter((t) => (t.status || "Active") !== "Active").length}</strong>
             <span class="kpi-label">Down Trucks</span>
           </button>
         </div>
@@ -3015,17 +3015,18 @@ function renderRecapMobileCards(rows) {
     return user && ["dispatcher", "manager", "admin", "superadmin"].includes(user.role);
   }
 
-  const TRUCK_STATUSES = ["Active", "Inactive"];
+  const TRUCK_STATUSES = ["Active", "Unavailable", "Inactive"];
 
   function truckStatusPill(status) {
     const s = status || "Active";
-    return `<span class="pill ${s === "Inactive" ? "gray" : "amber"}">${escapeHtml(s)}</span>`;
+    const color = s === "Active" ? "green" : s === "Unavailable" ? "red" : "gray";
+    return `<span class="pill ${color}">${escapeHtml(s)}</span>`;
   }
 
   function visibleTrucks() {
     let rows = downTrucks;
     if (truckStatusFilter !== "all") rows = rows.filter((t) => (t.status || "Active") === truckStatusFilter);
-    return applySearch(rows, ["truckNumber", "issue", "woNumber", "status"]);
+    return applySearch(rows, ["truckNumber", "make", "vin", "license", "owner", "issue", "woNumber", "status"]);
   }
 
   function renderTruckTracker(user) {
@@ -3036,7 +3037,7 @@ function renderRecapMobileCards(rows) {
       <div class="section-title">
         <div>
           <h2>Truck Tracker</h2>
-          <p>Down trucks: issue, date, and work order (WO).</p>
+          <p>Fleet assets — make, VIN, status, plus issue and work order (WO).</p>
         </div>
         <div class="actions-row">
           ${editable ? `<button class="btn btn-primary" type="button" data-action="truck-add-row">+ Add truck</button>` : ""}
@@ -3076,8 +3077,8 @@ function renderRecapMobileCards(rows) {
 
       <div class="panel">
         <div class="panel-header">
-          <div><h3>Down trucks</h3><p>${trucks.length} shown of ${downTrucks.length}.</p></div>
-          <span class="pill amber">${downTrucks.length} logged</span>
+          <div><h3>Fleet</h3><p>${trucks.length} shown of ${downTrucks.length}.</p></div>
+          <span class="pill blue">${downTrucks.length} trucks</span>
         </div>
         <div class="panel-body">
           ${trucks.length ? `
@@ -3088,10 +3089,18 @@ function renderRecapMobileCards(rows) {
                   <tr>
                     <th class="row-number">#</th>
                     <th>Truck #</th>
+                    <th>Type</th>
+                    <th>Ownership</th>
+                    <th>Make</th>
+                    <th>Body</th>
+                    <th>Fuel</th>
+                    <th>Owner</th>
+                    <th>License</th>
+                    <th>VIN</th>
+                    <th>Status</th>
                     <th>Issue</th>
                     <th>Date</th>
                     <th>WO #</th>
-                    <th>Status</th>
                     ${editable ? "<th></th>" : ""}
                   </tr>
                 </thead>
@@ -3120,10 +3129,18 @@ function renderRecapMobileCards(rows) {
       <tr>
         <td class="row-number">${index}</td>
         <td class="id-cell">${inp("truckNumber")}</td>
+        <td>${inp("vehicleType")}</td>
+        <td>${inp("ownership")}</td>
+        <td>${inp("make")}</td>
+        <td>${inp("body")}</td>
+        <td>${inp("fuel")}</td>
+        <td>${inp("owner")}</td>
+        <td class="id-cell">${inp("license")}</td>
+        <td class="id-cell">${inp("vin")}</td>
+        <td>${statusCtl}</td>
         <td>${editable ? `<textarea class="table-control" rows="1" data-truck-field="issue" data-truck-id="${t.id}">${escapeHtml(t.issue || "")}</textarea>` : `<span>${escapeHtml(t.issue || "-")}</span>`}</td>
         <td>${inp("downDate", "date")}</td>
         <td class="id-cell">${inp("woNumber")}</td>
-        <td>${statusCtl}</td>
         ${editable ? `<td><button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">✕</button></td>` : ""}
       </tr>
     `;
@@ -3148,10 +3165,18 @@ function renderRecapMobileCards(rows) {
                 ${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="truck-delete-row" data-truck-id="${t.id}">Delete</button>` : truckStatusPill(t.status)}
               </div>
               ${editable ? row("Truck #", "truckNumber") : ""}
+              ${row("Type", "vehicleType")}
+              ${row("Ownership", "ownership")}
+              ${row("Make", "make")}
+              ${row("Body", "body")}
+              ${row("Fuel", "fuel")}
+              ${row("Owner", "owner")}
+              ${row("License", "license")}
+              ${row("VIN", "vin")}
+              ${statusRow}
               ${row("Issue", "issue")}
               ${row("Date", "downDate", "date")}
               ${row("WO #", "woNumber")}
-              ${statusRow}
             </article>`;
         }).join("")}
       </div>
@@ -3171,6 +3196,7 @@ function renderRecapMobileCards(rows) {
     const t = {
       id: `dt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       truckNumber: "", issue: "", woNumber: "", downDate: todayISO(), status: "Active",
+      vehicleType: "", ownership: "", make: "", body: "", fuel: "", owner: "", license: "", vin: "",
     };
     downTrucks.unshift(t);
     render();

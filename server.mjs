@@ -694,6 +694,9 @@ const requestHandler = (req, res) => {  // CORS Headers
             id: body.id, accountId,
             truckNumber: body.truckNumber, issue: body.issue,
             woNumber: body.woNumber, downDate: body.downDate, status: body.status,
+            vehicleType: body.vehicleType, ownership: body.ownership, make: body.make,
+            body: body.body, fuel: body.fuel, owner: body.owner,
+            license: body.license, vin: body.vin,
           });
           return sendJson(200, { success: true, truck: saved });
         }

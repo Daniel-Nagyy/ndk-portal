@@ -89,6 +89,10 @@ function addColumnIfMissing(table, column, def) {
 addColumnIfMissing("accounts", "telegram_bot_token_enc", "TEXT");
 addColumnIfMissing("accounts", "telegram_chat_id", "TEXT");
 addColumnIfMissing("accounts", "api_key", "TEXT");
+// Truck Tracker asset fields (fleet roster: type, ownership, make, body, fuel, etc.)
+for (const col of ["vehicle_type", "ownership", "make", "body", "fuel", "owner", "license", "vin"]) {
+  addColumnIfMissing("down_trucks", col, "TEXT");
+}
 
 const genId = (prefix) => `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 const genApiKey = () => `ndk_${crypto.randomBytes(24).toString("base64url")}`;
@@ -373,6 +377,9 @@ function rowToDownTruck(r) {
     id: r.id, accountId: r.account_id, truckNumber: r.truck_number || "",
     issue: r.issue || "", woNumber: r.wo_number || "", downDate: r.down_date || "",
     status: r.status || "Down", updatedAt: r.updated_at,
+    vehicleType: r.vehicle_type || "", ownership: r.ownership || "", make: r.make || "",
+    body: r.body || "", fuel: r.fuel || "", owner: r.owner || "",
+    license: r.license || "", vin: r.vin || "",
   };
 }
 
@@ -390,16 +397,23 @@ export function getDownTruckById(id) {
 
 export function upsertDownTruck(t) {
   db.prepare(`
-    INSERT INTO down_trucks (id, account_id, truck_number, issue, wo_number, down_date, status, updated_at)
-    VALUES (@id, @account_id, @truck_number, @issue, @wo_number, @down_date, @status, datetime('now'))
+    INSERT INTO down_trucks (id, account_id, truck_number, issue, wo_number, down_date, status,
+      vehicle_type, ownership, make, body, fuel, owner, license, vin, updated_at)
+    VALUES (@id, @account_id, @truck_number, @issue, @wo_number, @down_date, @status,
+      @vehicle_type, @ownership, @make, @body, @fuel, @owner, @license, @vin, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       account_id = excluded.account_id, truck_number = excluded.truck_number,
       issue = excluded.issue, wo_number = excluded.wo_number, down_date = excluded.down_date,
-      status = excluded.status, updated_at = datetime('now')
+      status = excluded.status, vehicle_type = excluded.vehicle_type, ownership = excluded.ownership,
+      make = excluded.make, body = excluded.body, fuel = excluded.fuel, owner = excluded.owner,
+      license = excluded.license, vin = excluded.vin, updated_at = datetime('now')
   `).run({
     id: t.id, account_id: t.accountId, truck_number: t.truckNumber || "",
     issue: t.issue || "", wo_number: t.woNumber || "", down_date: t.downDate || "",
     status: t.status || "Active",
+    vehicle_type: t.vehicleType || "", ownership: t.ownership || "", make: t.make || "",
+    body: t.body || "", fuel: t.fuel || "", owner: t.owner || "",
+    license: t.license || "", vin: t.vin || "",
   });
   return getDownTruckById(t.id);
 }
