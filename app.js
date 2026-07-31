@@ -2571,7 +2571,6 @@ function renderRecapPage(user) {
           <span class="field-label">📅 Pick a date</span>
           <input class="table-control date-select" type="date" data-recap-date-picker value="${escapeHtml(selectedRecapDate)}" />
         </label>
-        <button class="btn btn-secondary btn-small" type="button" data-action="recap-today">Today</button>
         <label class="field compact-field" style="flex:1;min-width:160px">
           <span class="field-label">🔎 Search</span>
           <input class="table-control" type="search" data-search placeholder="Driver, trip, block, VRID…" value="${escapeHtml(searchText)}" />
@@ -4257,10 +4256,6 @@ case "hos-close-filters":
         break;
       case "recap-delete-row":
         deleteRecapRow(action.dataset.recapId);
-        break;
-      case "recap-today":
-        selectedRecapDate = todayISO();
-        render();
         break;
       case "recap-print":
         exportRecapPrintable(user);
