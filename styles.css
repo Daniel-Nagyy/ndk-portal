@@ -4750,3 +4750,49 @@ textarea.table-control {
 
 /* HOS desktop: separate the "X of Y drivers" meta row from the filters above it. */
 .hos-controls-meta { margin-top: 10px; }
+
+/* ---- Company Scorecard (owner/manager home) ---- */
+.scorecard-panel {
+  margin: 14px 0;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: linear-gradient(160deg, rgba(53,199,107,0.12), rgba(58,130,246,0.07) 55%, rgba(255,255,255,0.02));
+  box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+}
+.scorecard-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.scorecard-head h3 { margin: 0; font-size: 1.05rem; }
+.scorecard-period { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.scorecard-overall { margin-bottom: 16px; }
+.scorecard-overall-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 999px; font-weight: 700; font-size: 0.95rem;
+  color: #0b1f13; background: linear-gradient(90deg, #5fe0a0, #35c76b);
+  box-shadow: 0 4px 14px rgba(53,199,107,0.35);
+}
+.score-rings { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+@media (max-width: 640px) { .score-rings { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+.score-ring { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.score-ring-svg { width: 96px; height: 96px; display: block; }
+.score-ring-track { fill: none; stroke: rgba(255,255,255,0.10); stroke-width: 9; }
+.score-ring-fill {
+  fill: none; stroke: var(--ring-color, #35c76b); stroke-width: 9; stroke-linecap: round;
+  transition: stroke-dashoffset 0.9s cubic-bezier(0.22,1,0.36,1);
+  filter: drop-shadow(0 0 6px var(--ring-color, #35c76b));
+}
+.score-ring-center {
+  position: absolute; top: 0; left: 0; right: 0; height: 96px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1;
+}
+.score-ring-center strong { font-size: 1.15rem; font-weight: 800; }
+.score-ring-center span { font-size: 0.7rem; color: var(--muted); }
+.score-ring-label { font-size: 0.72rem; color: var(--muted); text-align: center; }
+.ring-green  { --ring-color: #35c76b; }
+.ring-blue   { --ring-color: #3a82f6; }
+.ring-purple { --ring-color: #9b6bff; }
+.ring-teal   { --ring-color: #25c2c2; }
+.scorecard-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-bottom: 12px; }
+.sc-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--muted); }
+.sc-field--wide { grid-column: 1 / -1; }
+.sc-input { width: 100%; box-sizing: border-box; }
+.scorecard-actions { display: flex; justify-content: flex-end; gap: 8px; }

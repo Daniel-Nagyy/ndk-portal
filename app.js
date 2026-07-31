@@ -43,6 +43,8 @@
   let recapFilter = "all";
   let editingAccountId = null; // when set, the Accounts form edits this account instead of creating
   let downTrucks = []; // Truck Tracker rows — DB-backed only, never persisted to localStorage
+  let scorecard = null; // Company scorecard for the logged-in account (DB-backed)
+  let scorecardEditing = false; // manager inline-edit toggle on the home scorecard
   let truckStatusFilter = "all";
   let dataRefreshing = false;
   let netradyneAlerts = [];
@@ -488,7 +490,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     dataRefreshing = true;
     if (manual) render();
     try {
-      await Promise.all([loadRecaps(), loadDownTrucks()]);
+      await Promise.all([loadRecaps(), loadDownTrucks(), loadScorecard()]);
       if (["owner", "dispatcher"].includes(user.role)) await fetchGeotabDriversReadiness();
       await pollNetradyneAlerts();
     } catch (_) { /* ignore */ }
@@ -505,6 +507,31 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     } catch (e) {
       console.warn("Failed to load down trucks:", e);
     }
+  }
+
+  async function loadScorecard() {
+    try {
+      const res = await fetch("/api/scorecard", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success) scorecard = data.scorecard || null;
+    } catch (e) {
+      console.warn("Failed to load scorecard:", e);
+    }
+  }
+
+  async function saveScorecard() {
+    if (!scorecard) return;
+    try {
+      const res = await fetch("/api/scorecard", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(scorecard),
+      });
+      const data = await res.json();
+      if (data.success) { scorecard = data.scorecard; showToast("Scorecard saved."); }
+      else showToast(data.error || "Could not save scorecard.");
+    } catch (_) { showToast("Could not save scorecard."); }
+    scorecardEditing = false;
+    render();
   }
 
   function saveState() {
@@ -1855,6 +1882,73 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
     `;
   }
 
+  // One circular gauge for a single 0–100 metric.
+  function scoreRing(label, value, colorClass) {
+    const v = Math.max(0, Math.min(100, Number(value) || 0));
+    const r = 42, c = 2 * Math.PI * r;
+    const off = c * (1 - v / 100);
+    return `
+      <div class="score-ring ${colorClass}">
+        <svg viewBox="0 0 100 100" class="score-ring-svg" aria-hidden="true">
+          <circle class="score-ring-track" cx="50" cy="50" r="${r}" />
+          <circle class="score-ring-fill" cx="50" cy="50" r="${r}"
+            stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"
+            transform="rotate(-90 50 50)" />
+        </svg>
+        <div class="score-ring-center"><strong>${v.toFixed(1)}</strong><span>%</span></div>
+        <span class="score-ring-label">${escapeHtml(label)}</span>
+      </div>`;
+  }
+
+  // Company scorecard: cool gauges for everyone, inline edit for managers.
+  function renderScorecard(user) {
+    if (!scorecard) return "";
+    const s = scorecard;
+    const canEdit = user.serverRole === "manager" || user.serverRole === "superadmin";
+
+    if (scorecardEditing && canEdit) {
+      const inp = (field, attrs = "") => `<input class="sc-input table-control" data-scorecard-field="${field}" value="${escapeHtml(String(s[field] ?? ""))}" ${attrs} />`;
+      const num = 'type="number" step="0.1" min="0" max="100"';
+      return `
+        <section class="scorecard-panel">
+          <div class="scorecard-head">
+            <h3>Company Scorecard</h3>
+            <span class="scorecard-period">${escapeHtml(s.periodLabel)}</span>
+          </div>
+          <div class="scorecard-edit-grid">
+            <label class="sc-field sc-field--wide"><span>Overall summary</span>${inp("overall")}</label>
+            <label class="sc-field sc-field--wide"><span>Period label</span>${inp("periodLabel")}</label>
+            <label class="sc-field"><span>Acceptance %</span>${inp("acceptance", num)}</label>
+            <label class="sc-field"><span>On time %</span>${inp("onTime", num)}</label>
+            <label class="sc-field"><span>App usage %</span>${inp("appUsage", num)}</label>
+            <label class="sc-field"><span>Disruption-free %</span>${inp("disruptionFree", num)}</label>
+          </div>
+          <div class="scorecard-actions">
+            <button class="btn btn-secondary btn-small" type="button" data-action="scorecard-cancel">Cancel</button>
+            <button class="btn btn-primary btn-small" type="button" data-action="scorecard-save">Save</button>
+          </div>
+        </section>`;
+    }
+
+    return `
+      <section class="scorecard-panel">
+        <div class="scorecard-head">
+          <div>
+            <h3>Company Scorecard</h3>
+            <span class="scorecard-period">${escapeHtml(s.periodLabel)}</span>
+          </div>
+          ${canEdit ? `<button class="btn btn-secondary btn-small" type="button" data-action="scorecard-edit">Edit</button>` : ""}
+        </div>
+        <div class="scorecard-overall"><span class="scorecard-overall-badge">★ ${escapeHtml(s.overall)}</span></div>
+        <div class="score-rings">
+          ${scoreRing("Acceptance", s.acceptance, "ring-green")}
+          ${scoreRing("On time", s.onTime, "ring-blue")}
+          ${scoreRing("App usage", s.appUsage, "ring-purple")}
+          ${scoreRing("Disruption-free", s.disruptionFree, "ring-teal")}
+        </div>
+      </section>`;
+  }
+
   function renderOwnerMobileApp(user) {
     const metrics = metricsFor(user);
     const rows = visibleRecaps(user);
@@ -1913,6 +2007,8 @@ function renderHosControlsBar(filteredCount, totalCount, summaryHTML = "") {
             <span class="kpi-label">Down Trucks</span>
           </button>
         </div>
+
+        ${renderScorecard(user)}
 
         <!-- HOS RISK BOARD -->
         <section class="mobile-section">
@@ -4312,6 +4408,18 @@ case "hos-close-filters":
       case "truck-print":
         exportTruckPrintable();
         break;
+      case "scorecard-edit":
+        scorecardEditing = true;
+        render();
+        break;
+      case "scorecard-cancel":
+        scorecardEditing = false;
+        await loadScorecard(); // discard unsaved edits
+        render();
+        break;
+      case "scorecard-save":
+        await saveScorecard();
+        break;
       case "refresh-data":
         await refreshAllData(true);
         break;
@@ -4422,6 +4530,13 @@ case "hos-close-filters":
       if (!t) return;
       t[truckField.dataset.truckField] = truckField.value;
       saveDownTruck(t); // persist to DB; no re-render so the cursor stays put
+      return;
+    }
+
+    const scoreField = event.target.closest("[data-scorecard-field]");
+    if (scoreField && scorecard) {
+      // Buffer edits locally; persisted only when the manager hits Save.
+      scorecard[scoreField.dataset.scorecardField] = scoreField.value;
       return;
     }
 
@@ -4551,6 +4666,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       await loadAccountsAndUsers();
       await loadRecaps();
       await loadDownTrucks();
+      await loadScorecard();
       render();
       refreshPushSubscription();
       if (appUser.role === "owner") fetchGeotabDriversReadiness();
