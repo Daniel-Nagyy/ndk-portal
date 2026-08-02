@@ -832,7 +832,8 @@ function renderNetradyneDashboard(user) {
   }
 
   function getDefaultRecapDate(user) {
-    return availableRecapDates(user)[0] || todayISO();
+    // Always open the recap on today's date (on load/refresh).
+    return todayISO();
   }
 
   function canSeeClient(user, clientId) {
@@ -4211,6 +4212,10 @@ if (sortBtn && currentView === 'netradyne-dashboard') {
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
       currentView = viewButton.dataset.view;
+      // Opening the daily recap always lands on today.
+      if (["recap", "owner-recap", "dispatcher-recap"].includes(currentView)) {
+        selectedRecapDate = todayISO();
+      }
       sidebarOpen = false;
       render();
       if (currentView === "owner-hos" && ["owner", "dispatcher"].includes(getCurrentUser()?.role)) {
