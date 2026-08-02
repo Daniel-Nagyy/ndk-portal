@@ -79,12 +79,6 @@ CREATE TABLE IF NOT EXISTS down_trucks (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
-
-CREATE TABLE IF NOT EXISTS scorecards (
-  account_id TEXT PRIMARY KEY,
-  payload TEXT NOT NULL,
-  updated_at TEXT DEFAULT (datetime('now'))
-);
 `);
 
 // --- lightweight migrations: add columns to existing DBs if missing ---
@@ -488,41 +482,3 @@ export function syncRecaps(recapsArray) {
   tx(recapsArray);
 }
 
-// ---------- Company scorecard (per account) ----------
-const DEFAULT_SCORECARD = {
-  overall: "Fantastic overall",
-  periodLabel: "Last 6 weeks",
-  acceptance: 99.3,
-  onTime: 98.5,
-  appUsage: 99.9,
-  disruptionFree: 99.9,
-};
-
-export function getScorecard(accountId) {
-  if (!accountId) return { ...DEFAULT_SCORECARD };
-  const r = db.prepare("SELECT payload FROM scorecards WHERE account_id = ?").get(accountId);
-  if (!r) return { ...DEFAULT_SCORECARD };
-  try { return { ...DEFAULT_SCORECARD, ...JSON.parse(r.payload) }; }
-  catch (_) { return { ...DEFAULT_SCORECARD }; }
-}
-
-export function saveScorecard(accountId, input) {
-  const current = getScorecard(accountId);
-  const clampPct = (v, fallback) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : fallback;
-  };
-  const next = {
-    overall: typeof input.overall === "string" ? input.overall.slice(0, 80) : current.overall,
-    periodLabel: typeof input.periodLabel === "string" ? input.periodLabel.slice(0, 40) : current.periodLabel,
-    acceptance: clampPct(input.acceptance, current.acceptance),
-    onTime: clampPct(input.onTime, current.onTime),
-    appUsage: clampPct(input.appUsage, current.appUsage),
-    disruptionFree: clampPct(input.disruptionFree, current.disruptionFree),
-  };
-  db.prepare(`INSERT INTO scorecards (account_id, payload, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(account_id) DO UPDATE SET payload = excluded.payload, updated_at = datetime('now')`)
-    .run(accountId, JSON.stringify(next));
-  return next;
-}

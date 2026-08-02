@@ -15,8 +15,7 @@ import {
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
   getRecaps, syncRecaps, getRecapById, deleteRecap, getDbOverview,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
-  getAccountByApiKey, regenerateApiKey,
-  getScorecard, saveScorecard
+  getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus } from './ingest-store.mjs';
 
@@ -711,35 +710,6 @@ const requestHandler = (req, res) => {  // CORS Headers
             }
           }
           return sendJson(200, { success: true, deleted: deleteDownTruck(body.id) });
-        }
-        return sendJson(405, { success: false, error: 'Method not allowed' });
-      } catch (e) {
-        sendJson(500, { success: false, error: simplifyError(e) });
-      }
-    })();
-    return;
-  }
-
-  // ---------- Company scorecard (per account) — managers edit, everyone reads ----------
-  if (url.pathname === '/api/scorecard') {
-    (async () => {
-      try {
-        const authUser = getAuthUser(req);
-        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
-        const isSuper = authUser.role === 'superadmin';
-        const accountId = isSuper ? (url.searchParams.get('accountId') || null) : authUser.account_id;
-
-        if (req.method === 'GET') {
-          if (!accountId) return sendJson(200, { success: true, scorecard: null });
-          return sendJson(200, { success: true, scorecard: getScorecard(accountId) });
-        }
-        if (req.method === 'POST') {
-          if (!(authUser.role === 'manager' || isSuper)) {
-            return sendJson(403, { success: false, error: 'Only managers can edit the scorecard' });
-          }
-          if (!accountId) return sendJson(400, { success: false, error: 'No account for this scorecard' });
-          const body = await readJsonBody(req);
-          return sendJson(200, { success: true, scorecard: saveScorecard(accountId, body) });
         }
         return sendJson(405, { success: false, error: 'Method not allowed' });
       } catch (e) {
