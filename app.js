@@ -1417,7 +1417,11 @@ function renderNetradyneDashboard(user) {
   }
 
   function renderDisputeSelect(row, field, options, editable) {
-    if (!editable) return renderDisputeStatusPill(row[field]);
+    // Read-only: only Status gets a colored pill; Type reads as plain text.
+    if (!editable) {
+      if (field === "status") return renderDisputeStatusPill(row[field]);
+      return `<span class="dispute-plain">${escapeHtml(row[field] || "-")}</span>`;
+    }
     return `
       <select class="table-control" data-dispute-field="${field}" data-dispute-id="${row.id}">
         ${options.map((o) => `<option value="${escapeHtml(o)}" ${row[field] === o ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
@@ -1442,8 +1446,8 @@ function renderNetradyneDashboard(user) {
     if (!rows.length) return disputeEmptyState(editable);
     return `
       <div class="table-wrap">
-        <table class="recap-table dispute-table" ${fixedTableStyle([46, 120, 130, 105, 170, 150, 170, 180, 110, 75, 150, 150, 110, 80], editable)}>
-          ${colgroupHtml([46, 120, 130, 105, 170, 150, 170, 180, 110, 75, 150, 150, 110, 80], editable)}
+        <table class="recap-table dispute-table" ${fixedTableStyle([46, 120, 130, 105, 165, 160, 200, 175, 110, 75, 150, 150, 110, 80], editable)}>
+          ${colgroupHtml([46, 120, 130, 105, 165, 160, 200, 175, 110, 75, 150, 150, 110, 80], editable)}
           <thead>
             <tr>
               <th class="row-number">#</th>

@@ -4731,8 +4731,15 @@ textarea.table-control {
   min-width: 0;
   table-layout: fixed;
 }
-.nr-table th, .dispute-table th { padding: 10px 10px; font-size: 0.72rem; }
-.nr-table td, .dispute-table td { padding: 9px 10px; font-size: 0.9rem; vertical-align: top; }
+.nr-table th, .dispute-table th { padding: 10px 14px; font-size: 0.72rem; }
+.nr-table td, .dispute-table td { padding: 9px 14px; font-size: 0.9rem; vertical-align: top; }
+/* Owner (read-only) view: extra gap so long text values (e.g. "On time to
+   destination") don't sit flush against the next column. */
+.dispute-table td span { padding-right: 10px; }
+/* Read-only Type value: quiet plain text (no pill), so it doesn't crowd the
+   Driver Name column. */
+.dispute-table .dispute-plain { color: #b9c6d4; font-size: 0.86rem; }
+.dispute-table .driver-cell span { font-weight: 600; }
 
 /* Every field fills its (fixed pixel-width) column. */
 .nr-table .table-control,
