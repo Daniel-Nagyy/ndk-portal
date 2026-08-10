@@ -68,6 +68,24 @@ CREATE TABLE IF NOT EXISTS recaps (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS netradyne_recaps (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  daily_date TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS disputes (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  daily_date TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS down_trucks (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
@@ -369,6 +387,78 @@ export function getRecaps(accountId = null) {
   }
   const rows = db.prepare("SELECT * FROM recaps").all();
   return rows.map(r => JSON.parse(r.payload));
+}
+
+// ---------- Netradyne Recaps ----------
+export function getNetradyneRecaps(accountId = null) {
+  const rows = accountId
+    ? db.prepare("SELECT * FROM netradyne_recaps WHERE client_id = ?").all(accountId)
+    : db.prepare("SELECT * FROM netradyne_recaps").all();
+  return rows.map(r => JSON.parse(r.payload));
+}
+
+export function getNetradyneRecapById(id) {
+  const r = db.prepare("SELECT * FROM netradyne_recaps WHERE id = ?").get(id);
+  return r ? { id: r.id, clientId: r.client_id, dailyDate: r.daily_date, ...JSON.parse(r.payload) } : null;
+}
+
+export function deleteNetradyneRecap(id) {
+  return db.prepare("DELETE FROM netradyne_recaps WHERE id = ?").run(id).changes;
+}
+
+export function syncNetradyneRecaps(recapsArray) {
+  const stmt = db.prepare(`
+    INSERT INTO netradyne_recaps (id, client_id, daily_date, payload, updated_at)
+    VALUES (@id, @client_id, @daily_date, @payload, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      client_id = excluded.client_id,
+      daily_date = excluded.daily_date,
+      payload = excluded.payload,
+      updated_at = datetime('now')
+  `);
+  const tx = db.transaction((recs) => {
+    for (const r of recs) {
+      if (!r.id || !r.clientId || !r.dailyDate) continue;
+      stmt.run({ id: r.id, client_id: r.clientId, daily_date: r.dailyDate, payload: JSON.stringify(r) });
+    }
+  });
+  tx(recapsArray);
+}
+
+// ---------- Disputes (Dispute Tracker: on-time & acceptance) ----------
+export function getDisputes(accountId = null) {
+  const rows = accountId
+    ? db.prepare("SELECT * FROM disputes WHERE client_id = ?").all(accountId)
+    : db.prepare("SELECT * FROM disputes").all();
+  return rows.map(r => JSON.parse(r.payload));
+}
+
+export function getDisputeById(id) {
+  const r = db.prepare("SELECT * FROM disputes WHERE id = ?").get(id);
+  return r ? { id: r.id, clientId: r.client_id, dailyDate: r.daily_date, ...JSON.parse(r.payload) } : null;
+}
+
+export function deleteDispute(id) {
+  return db.prepare("DELETE FROM disputes WHERE id = ?").run(id).changes;
+}
+
+export function syncDisputes(disputesArray) {
+  const stmt = db.prepare(`
+    INSERT INTO disputes (id, client_id, daily_date, payload, updated_at)
+    VALUES (@id, @client_id, @daily_date, @payload, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      client_id = excluded.client_id,
+      daily_date = excluded.daily_date,
+      payload = excluded.payload,
+      updated_at = datetime('now')
+  `);
+  const tx = db.transaction((recs) => {
+    for (const r of recs) {
+      if (!r.id || !r.clientId || !r.dailyDate) continue;
+      stmt.run({ id: r.id, client_id: r.clientId, daily_date: r.dailyDate, payload: JSON.stringify(r) });
+    }
+  });
+  tx(disputesArray);
 }
 
 // ---------- Down trucks (Truck Tracker) ----------

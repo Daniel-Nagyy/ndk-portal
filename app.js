@@ -18,6 +18,8 @@
     'truck-tracker': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',
     'my-shifts': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
     takeover: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
+    'netradyne-recap': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
+    'dispute-tracker': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>',
   };
 
   function getNavIcon(name) {
@@ -52,6 +54,137 @@ let netradyneSortDir = 'desc';
   let selectedRecapDate = getDefaultRecapDate(getCurrentUser());
   let expandedRecapIds = new Set(); // which mobile recap cards are expanded (survives re-render)
   let searchText = "";
+
+  // ---------- Netradyne Recap (manual, editable table — dispatch edits, owner views) ----------
+  let netradyneRecaps = []; // DB-backed only, never persisted to localStorage
+  let selectedNetradyneDate = todayISO();
+  let netradyneRecapSearch = "";
+  const netradyneRecapSaveTimers = {};
+
+  // ---------- Dispute Tracker (On Time + Acceptance — dispatch edits, owner views) ----------
+  let disputes = []; // DB-backed only
+  let disputeSearch = "";
+
+  // The tracker is organized by WEEK (not day). Weeks run Saturday→Friday. Week 33 of
+  // 2026 starts Sat Aug 8 (Aug 8–14); week numbers are counted off that anchor.
+  const DISPUTE_WEEK_ANCHOR = "2026-08-08"; // Saturday = start of week 33
+  const DISPUTE_ANCHOR_WEEKNO = 33;
+  function parseIsoLocal(iso) { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); }
+  function ymdLocal(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+  function isoAddDays(iso, n) { const d = parseIsoLocal(iso); d.setDate(d.getDate() + n); return ymdLocal(d); }
+  function disputeWeekStartOf(iso) { const d = parseIsoLocal(iso); const off = (d.getDay() - 6 + 7) % 7; d.setDate(d.getDate() - off); return ymdLocal(d); }
+  function disputeWeekNumber(weekStart) {
+    const diff = Math.round((parseIsoLocal(weekStart) - parseIsoLocal(DISPUTE_WEEK_ANCHOR)) / (7 * 86400000));
+    return DISPUTE_ANCHOR_WEEKNO + diff;
+  }
+  function disputeWeekLabel(weekStart) {
+    const fmt = (iso) => parseIsoLocal(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return `${fmt(weekStart)} – ${fmt(isoAddDays(weekStart, 6))}`;
+  }
+  let selectedDisputeWeek = disputeWeekStartOf(todayISO());
+  let disputeTab = "ontime"; // "ontime" | "acceptance"
+  const disputeSaveTimers = {};
+
+  // Driver roster for the Netradyne Recap dropdowns — filtered to drivers currently
+  // working (per the active Driver Roster). Picking a name auto-fills the ID.
+  const NETRADYNE_DRIVERS = [
+    ["Aaryon Johnson", "MDQLRKHKOOTJPXUTMAFDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZ7K7ZQREAPFC6PWRFPF7QEVKTB5XN6B2RWFH56YJVOIETVA"],
+    ["Adrian Evelyn", "AZ7NCMXYZ6X2TAKNYNRDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYUYYRPVKNNHBU4H55XSVGMLNGOJNBADS3QF4UBXSET5ZVCN56A"],
+    ["Alex Ovalle", "4J4ID5L2XHWEPTUQKJ7DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYXQYEAJHPX3HA3CXCE7VTCAQLUKCAZHFNSSZ2UK73YPJ5YUUOA"],
+    ["Andre Raston", "P7KKMDARS5E54BU7XI5TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY3KUE66R2Q5Z7XXBYOSUGEISBTCQF57S2LSBMVKN24BSWBMU"],
+    ["Anthony Suttle", "4IKG7ST6DMUQJKBLZHUTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY56JKAV2TB3KD3XKTE36OZDQ6W7BGX242RD7TJRJ6XB5OH5Y"],
+    ["Antonio Flores", "DTYX3IEC5EQ53LHQWINDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYWKAICVOACP5GBWEOQSFRDBNLWY7LLSWP72UTIDADAAQEQ7DIQ"],
+    ["Arlonda Washington", "DRCYJFPT7MWUQ33VKJFTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZU5FYXUB6MWJUW35TMBGIXPSNY4YSAAYOI3IHORTANQAUD6LA"],
+    ["Aston Nelson", "DG6GIG4BXOYQK3UMPTDTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQDREMIMGCKS6MDXHLZLERGHXJHRMJTF365PNYGMKY7GCABA"],
+    ["benleycarment Carment", "CDCHZIEEEYHTJPFNFGTDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY4E6RKTVIVJFXVVPHPHO27KXJJGO26WNOLIRZ2DG7FCXSI6QGQ"],
+    ["Brenna Hyderkhan", "C4PZ4BW5O43HD3FETIWTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQXGR67P75PSVOB3GH6I5FWQRQTRWA5BBXDMWHL5DZLKYI2WKQ"],
+    ["Carllos ovalle", "3KTTYMLQFBVIQEMWOAWDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYSAFOIDQORABCOD2JDRGL2K7E4HNB3NR5M7NME6BO2KLZQEQCQ"],
+    ["cedric holcomb", "ILMBOZOG5N6AFDY4K5RDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY33BT7BAC345LDEKO7RTGNXXWUNWEUDNOE3KKQ25533PRWQI"],
+    ["Chris Shorter", "PLY6XC47TRHI7IDD7QPDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY6B3ISEZKZICUVHIT6XN4WB4BZAQSDEAWQBZMU2SGWSPMQNE"],
+    ["Christin Slaughter", "YS6HYJQSFEYA2OVVMEZDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYVI37X3ZZHT3FHNMJ6XZXDN6YJUM6QTBMUMJOEF2L3QB7GCU"],
+    ["Christopher Bridges", "BRQ2KX3Y65LSV2OPKR6DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYUIBN54BQX532SRK4LX5ABT7ULI6HVUSHHV3BBF3VCC6WPUKBQ"],
+    ["Christopher Murray", "53H55QRBU6BHZK6KLKLDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY57MJ6XP3HL2JCRF2CX6JDGPQCW2MNOQOTS6KRBGG22NPMDTKQ"],
+    ["Christopher Parsons", "3TKNCRAEACLB2HGYUXTDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQDGMCXLHSYYV5TDY3A3KJMGTHRVRTWFLUUH4YI7NMOBIHOY"],
+    ["Christopher Staples", "6UURKW46TD6XUZ5RNW5DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYX7RC4ZQIEARU3AEFWE6EBX6HCS3AVHLDGQKZIDIJ4KX6T3KVQ"],
+    ["Clarence Copeland", "VN7TC4H4SVFAJX4EFC4TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQ2VGEEOKPIUMEXIFQZSG7K4EEORMNW5DNETMWE547ZPAS34RQ"],
+    ["Damian jankie", "OQ452ZF5D7RUMBVCBNNDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYRC4BEVZSR2JXXTBLYZB7JZWOCDFZ67O4CTMC5IMZ5OIITOM"],
+    ["Daneil jackson", "4H5XI5QO6DNRGG2H2EHDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY6SANEPFYLO5BSQEUTLFP4N5DUOTR3QJIHUNG77U7ICFULEEHQ"],
+    ["Darius washington", "ANZHTTDTU5GJZ6VV73ITO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYV3PXUHNTIUFLXYZRCWVCZWDCIOJV3HUGUSGDJA7TSGOTYZ4"],
+    ["Daryl Fulmore", "4AZQVMXXKVAYBHTG2WNDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZ4AWYJ2UFG6QOQPUU62G3Y3NMIF34ENR7PTYZPZDGGAQ73L7A"],
+    ["DaShonda McClain", "E3GQJSTCUXLQW6XJZO6TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZHQHEM4X6P3MIP2Y4UDRDKR4LZ6T3G3EQOEIPESNG5CISCAIQ"],
+    ["Dawud Saifullah", "BG32GVOQIVCFW4V2TU2DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYUBABW7LVGHX3CGRAH4LMZKSQGAQ6R2ZGO6DMVTUNIBM7ZV6UA"],
+    ["Deondrea ANTONIO Millines", "PZF7IDWSS5ARS6GEYQDDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYXSGNKEOWL23FA6FN5ZHTUYG4RPJ7NRNPX4YLYJE2TLZTZM6HQ"],
+    ["Dequarvion Humphery", "VW6HKJGS4MTUZL5BVAYTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY7DOG5WXY5LCBXWI3QSNO5ICBICFX3GK65WTWZWTJECUMA5ONA"],
+    ["derrick woods", "4VQTAZ35LSGWDP346J4DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY7FYJOVC6D3HBCA75L3TC63QUD5UZZ7C6TJ2YZRN4XQOVR3I"],
+    ["DeStephen Beard", "HLGMUMRAB66Z3HNOXLNDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYXVZQWKQMGHCGMI4MEVCBLOMTR23AY3JJ6N2R6X5ES5ZP7F6PQ"],
+    ["Devin Rogers", "TAJE5J3TEARR6S6VBDDTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY2F742KGSU4WFA3CW2YLHSEFGLFLTGIPRESLGAK6ZMVAREXQDA"],
+    ["Devin Shaw", "CD7HEC4EB5PL6G6VTBDDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYY2YNF4ETGI4KQ7CREJOUM4I67YLMF575OCH7XNYJPIR2HUY"],
+    ["Dillon Whitaker", "UZQ4CBQVCMI4WKGJA7WDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZMDN74XLLLLPPLYROTPJZNDTLKRVNVCZ5EZSKCKWF2TLA27LQ"],
+    ["Ean Jansson", "OCU2KISMUGHXTUOI7WBDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY536P4YPZHVHRDAXPZ2K6U655T4DKY6C5AZNO7L3VGITRUTY"],
+    ["Earnest Franklin", "LL2NRHGYUM6WPOACO7PDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYVXGWWNJMR5RA4MCN6HBOA2KSQIQK7DEGREVBPETAZ7PR7YXDA"],
+    ["Eric Battle", "4ZEX53ZPX4S4JUV3UO4DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQA6AC4BPZPRU6J2E3QYJ6RI227ZRVLV2MM5ISLVFZP76KQ3SQ"],
+    ["Ericka Johnson", "BONO6PUW4UHLKFFWNJ5TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYXNQNX434E5YZLGY3FXT54NXWQQEM3UAWDN7DDEB2Z4HXP4HDQ"],
+    ["Fiz X", "NGGSEUZ3AUXVJOIJ6HXTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY5Q5F5RNGCTSRTCINCHTKWVYDONEOYWJMIWQKVZCDF7FOU2NWA"],
+    ["Frances johnson", "FTGSGUL3G36AZBFZPXUTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYS4W3PJG3STQ65YXEFW5OP77DD5XDNFMW7F6SVNKURY7A6NXEQ"],
+    ["francesca ward", "W27ID4UECM6LOWKX6QZTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZGGVX6PPE66LPKSRH3OTA5FPEAXBGHVBSOY7IBHMYU76KR7JA"],
+    ["George smith", "HV5WC2YIKDD6REXJEEQDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZ74TGCIZHZLBNW5JJZPZUGZTW5CZRMQ3MRAOFLJMBTICI6IZQ"],
+    ["Harold Johnson", "OMSNQIX2JRR4ANKH2ATDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYULO7OO4PDP7QGA3UBF36PM7OTWH5HVNQHVY24HEZW7PUUKQ3A"],
+    ["Jahdiel Smith (1)", "EFDRACSYPX6PNW3D2W2DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQS4Z63NNH2JVQBCT6CEHSAUEXLZU6F2LRSSEPYGP5EIABMSCA"],
+    ["Jahdiel Smith (2)", "N43RUXTYBWQMXDSJGQETO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZIZ2XNTIXBOVUQCA54BJRT3X3OPUR2QS54TCJSWMFIZ6MBFIQ"],
+    ["James Cates", "SW4EMZUY7GMMLLKUCM3DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY7VYPXPISFEDMY5UBT2ZO2X6M536NPNVKHRW26RHBZE7I5TQ"],
+    ["James Nelson", "RQHPSK7NHWBHTXB4A6UTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYTA2373P2RIA327AKYFYUNE7XUQWY72HRGUU545URK4QWXZY"],
+    ["Jaquantaye Beroid", "4XDOCLM5GOPNJ4CK6VITO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQ5Z2U2OOHLWSK7WIQUGNAMR4M4NJGUR3JJTJSQD5OKICFYQ3Q"],
+    ["Jaylon Garrison", "37IH6EDRICGW2YN2D6QDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQVVJHXGYAWX2UDHTEPHP6R7PDYRXBZ53RXRARXY4FMQ3KGI6A"],
+    ["Jennifer Woods", "XMQQHYO2OUVBZMUUADYDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY6CKQ5OB37QHWVZBOIBDYCZWM5YURXKLJQE2EVU6GANLGQBONA"],
+    ["Jessica Jones", "M5SD6VGT2OU337MIZI5TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY5XHDACRGNKAOZU4GD6ZIFDV3UXNF4VDDEW3DLOZO6T7BKN4"],
+    ["Joey Luvera", "QAURUMNF4KABFMUKICFTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY4PZABIQDTYMR3I7CAOKX2SUCBQOH6RP3UEGJJ7TTV7W5VYX6Q"],
+    ["John Guess", "4ILW7JLQKKXREIEL5KCTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY6RKWDEYQCTXBCQAYPTV4XV7ZEBROACYDZQ6LMPRUF7WEWQWTA"],
+    ["john Jordan", "PCSUF5D4YBHRVBBYDLTDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYXYWZAHYM4WAFLEDQTNY4V7HOYV6NID42KO3LHFI42PFZDSU"],
+    ["Johnathan Benson", "4MMNW55NBBYIUFNPLGWDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYUJHMHZWGLRCN7EZELZ7E3P2XQT2STR7IZBIDFMJEVO464GHYA"],
+    ["Johnny grubbs", "NEQ5Q57MPNKIHWKXC3ODO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYVFEBZXQLRRPMZOM6ALBT7DPFHYA7DEUM3AEM7NPNOFA7HUUYQ"],
+    ["Jordan Brown", "IGDQPH6WJNGJXIAJKKJTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY2IRCTHF5GNZQE3TJYTLUXXO46FNQRJMPXYL37TUHQIPP47HVA"],
+    ["Jordan Teliaferro", "PPMD4UCA2NDA4366H4QDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYVENZFBXT4UJX3QPIUFKRYKBR2ZGGU3CV4EEYXHE4JQMWDSU"],
+    ["JOSEPH BRONSON", "3QO3RFEHZENP2R7W7AZDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY72FHXAHVLJVVLRDZTT4MDTNTVJQRQ6KJUNKMAMZJZB4235UIA"],
+    ["Joyce Alverson", "APAL7QQ6ZDHLE7LZ363TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYUMS6S366SDYM6G7FPLNE6HLQHBQV4JL3TFNRABT247FMVTYSQ"],
+    ["Kabren Hawkins", "5SUETHTUCDI4YVIJ7PUDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY465SNIIAAI3HF73UA2BVKGKCZ47M3I7PMN2NHMVUSRSLRUQ"],
+    ["Kendra NYANNA Spellen", "EUI54KH6HM6HE7QRLAYDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYYTF42RKW4EHH3QRF7FFJ4QKQZQ6MMUWX5SQXKPFWC552HWQ"],
+    ["Kobe Brown", "LXVAWYUVC3HXLQ7XYCHDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQACNGJRAUBCZNFZNKPLV7EUBATQZD2A5BAQM2URRBMEYU2CZA"],
+    ["kohantis haygood", "XGWDVXVANB57VER6PR7TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYSJVXFC5YK7JTI5H6W4QTQ37J4BMLAW2UTXC7UYM27CL6E5QZQ"],
+    ["Kyle Arnold", "5LYPAF4QXRD4226PRIGTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYXOJK2HH76WJGTW54ICPAHEVOTWDKS5F5TUZQA4WAXYNQPLR2Q"],
+    ["Lakeisha berry", "F2HMAPWEPVRYW5C573PDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYR7TFGO46VH4E62T3N777J2BY5YVTDJ2CLBVFQA3OPUX5RZQNA"],
+    ["Lakeitha Williams", "H4SZX3XUHMPXA7O4CXXTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY55TYU7OF2V4GUTJZQMF6ZQIYNJJ3AQALU5PGISDYKJDHQ7QOQ"],
+    ["LaRenzo Foster", "CH5EZEC7AEPLRTFEYAIDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY5H4PP7IO52X5IQBRNXWTZJZF4HLXH5U3ELDNDK2WDWNDX3GZQ"],
+    ["Leando Mcfarlane", "TMOROZKWZD3BZKJVGEZDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZURSZJM3XSWH53UQ3RGTBGQAYCXL5ID4YKWLSTZYMK26R3WVQ"],
+    ["Lynnette Young", "FTGQT2JRAGZPVE7LD7EDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYSJTRMWKYPTWDBWJXFI6GVKZ2KUGLOPNK4SWPFQ7FUEGPX7Q"],
+    ["Mario Lopez", "XP6VSE6TPYYB6RD4N4SDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZOM4ICC7AIQOGBKNX5BQRHY24RYE5XCTIW3NIR52YTHOZCA"],
+    ["Marshall Pettis", "TOX47JFCYP6B2TPVRQYTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZUMWONM3RNUUUI6BGY7XBQNTZJQZZY2TZM75HN2PBJ2IBC6JQ"],
+    ["Matthew Bradwell", "ZVEJ4KGEPK3A6TRKTGJDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYREF5PBMOKP4POQ7YPOSJQNX3XSKOS3URUNSUNGH5G6UITB4"],
+    ["Maxine Greer", "YQQUGMUPWB7M27XTLD6TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQGGKAHFBQQESWNMWJF2ZPULMBPQ4RKN65UDMQVAXI72N6SG5Q"],
+    ["Mlinda Mwenda", "54TIHNRMUFDXOYHFNSMDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYTYCAWHUKGS25ODE5HKCJYK42TPCFBN7GMLSXZETUGGRKJFTKA"],
+    ["Nasrudin Usman", "W2F5TW4BVEYGEFZDCV7TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYZIEYGUQCGPVQKEQA6VP3KTLWVUUGJ3SXLHJUGR6RKQMYRPM"],
+    ["Natorius Antonio Bell", "2HW7H6JVQA2MDGBUGO3DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYXSXTHPHE5XUBHBOOMERIVFC3O6JX7DK4YYDBQLHTZ2AWP5PMQ"],
+    ["Pierre Sears", "EGH4V4QJANFDGI6LTJATO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQR3QWLG2WHJQWS3TQURDBUZD5WQ223TIJAIU3TZTDJUN6HVYA"],
+    ["randolph henderson", "ZZ74QL45BOQLXMWO624TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYTO5KSMRXEK54BSHO6AEAMD63BWWERIOXZH42NSF7UACINPCQA"],
+    ["Roderick Thomas", "GXP72T65R27F6VSH6VKTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY4YMCL3P7ASMXIPAPM6N4GNTRLLNVZKVNMXGA5X3YDURFIOJEA"],
+    ["Rutherford brice", "HW2GGEYE5ZDCDUG4YYHTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYQHF2MP7O6BWXBD6CF4RWTOV52HFKDVTQHL4QKDXBNPBIKCUNQ"],
+    ["Selena Deans", "FQ6ZM3XBQFGEHKZOLKDDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYUKDWX3LRHNOCU2QSLQMSCPMCLJTCF7PIQ4LFWGK5DUDHW5AZA"],
+    ["Shealvia Terrell", "HVDOFR2MCUE66YOEWF6DO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYTLJQLUPKETBLPP2IXQ4LG4DBAKBSSF3XS6LWOMT6KAGSWEY"],
+    ["Shenita Perez", "FR7JXJ56SGHJNMRJCI6TO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY3WSP2PPXVQ2EOSXEXV4ES7CUSMQOGZDSMKQMWQMKKWV3B7FZA"],
+    ["Sherika Hewitt", "GQCBZ2NCXT7RC6HJQ7IDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYWJMPC54X6ATTCSS7KONXZQ7UBYACLYQLRHQK37EUKOYFGDOBQ"],
+    ["Tiffany Torrence", "ZIYLRJE6CNJDANU2GQHTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYWKIDVNEQYNHBVXVOMCHV5UOIYKQNRY4QGT6PMD3XGR6BMTOWQ"],
+    ["Tyrell Appling", "JZYKF4BLGUSSZCAX4TQTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJYSCCLXRWTVBSHPJDIOS2AJSDCA7LQZB4PAA6NL244HYKSPNE"],
+    ["Van Nunga", "CPKTOSSUGLDPIEALGHPTO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY6KCRMKMYBSB654TMTKV23XWWTDEQLCMUETGR3POFNHVO3CQ"],
+    ["Verlyn Willis", "WJ4AF23KLCJRPNQIJESDO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY5XHFNEISJDMBF7CEZH7FOMPUISXRTATFWYL6GGK24T43XZDNQ"],
+    ["Willie Irby", "NPKQKF4UAYSEKDHHLHETO3DCNQZXE2TPGR4WI5LDNF2G42TYMJY2VDTI5EB6BVLVGMYXGTPFOY2DAA6MXYLYG6KTRIZ4KBM7U2BA"],
+  ];
+
+  const NETRADYNE_TRUCKS = [
+    "521243", "320152", "521086", "122323", "521247", "521112", "521132", "9010385",
+    "321939", "122106", "521245", "521107", "521248", "521044", "122005", "122289",
+    "122461", "907684", "322184", "122459", "521133", "122101", "521246", "122425",
+    "424011", "122107", "320142", "122102", "521249", "320150", "521244", "521117",
+    "122103", "521105", "122105", "322141", "521079", "521096", "122424",
+  ];
   let ownerHosSearchText = "";
   let ownerHosStatusFilter = "";
   let ownerHosSortFilter = "violationRisk"; // default: highest-risk drivers first
@@ -488,7 +621,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     dataRefreshing = true;
     if (manual) render();
     try {
-      await Promise.all([loadRecaps(), loadDownTrucks()]);
+      await Promise.all([loadRecaps(), loadDownTrucks(), loadNetradyneRecaps(), loadDisputes()]);
       if (["owner", "dispatcher"].includes(user.role)) await fetchGeotabDriversReadiness();
       await pollNetradyneAlerts();
     } catch (_) { /* ignore */ }
@@ -650,6 +783,8 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
         render();
         await loadAccountsAndUsers();
         await loadRecaps();
+        await loadNetradyneRecaps();
+        await loadDisputes();
         await loadDownTrucks();
         render();
         refreshPushSubscription();
@@ -818,6 +953,887 @@ function renderNetradyneDashboard(user) {
   `;
 }
 
+  // ================= Netradyne Recap (manual editable table) =================
+  function netradyneRecapClientIdFor(user) {
+    if (user && user.clientId) return user.clientId;
+    if (user && user.role === "admin") {
+      return app.querySelector("[data-nr-import-client]")?.value || state.clients[0]?.id || null;
+    }
+    return state.clients[0]?.id || null;
+  }
+
+  function visibleNetradyneRecaps(user) {
+    let rows = netradyneRecaps.filter((row) => row.dailyDate === selectedNetradyneDate);
+    if (user.role === "owner" || user.role === "dispatcher") {
+      // Non-admins are pinned to their own account server-side; guard client-side too.
+      rows = rows.filter((row) => !user.clientId || row.clientId === user.clientId);
+    }
+    const term = netradyneRecapSearch.trim().toLowerCase();
+    if (!term) return rows;
+    const keys = ["driverName", "netradyneDriverId", "vehicleNumber", "sessionId", "observations", "severity", "disputeNotes", "dateTime", "alertCount"];
+    return rows.filter((row) => keys.some((k) => String(row[k] || "").toLowerCase().includes(term)));
+  }
+
+  async function loadNetradyneRecaps() {
+    try {
+      const res = await fetch("/api/netradyne-recaps", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.recaps)) netradyneRecaps = data.recaps;
+    } catch (e) {
+      console.warn("Failed to load Netradyne recaps:", e);
+    }
+  }
+
+  function saveNetradyneRecapRow(row, immediate = false) {
+    if (!session || !row || !row.id) return;
+    const send = () => {
+      fetch("/api/netradyne-recaps/save", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recap: row }),
+      }).catch(() => {});
+    };
+    clearTimeout(netradyneRecapSaveTimers[row.id]);
+    if (immediate) { send(); return; }
+    netradyneRecapSaveTimers[row.id] = setTimeout(send, 600);
+  }
+
+  function addNetradyneRecapRow(user) {
+    const row = {
+      id: `nr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      clientId: netradyneRecapClientIdFor(user),
+      dailyDate: selectedNetradyneDate,
+      alertCount: "",
+      driverName: "",
+      netradyneDriverId: "",
+      dateTime: "",
+      sessionId: "",
+      vehicleNumber: "",
+      observations: "",
+      severity: "",
+      disputeNotes: "",
+    };
+    netradyneRecaps.push(row);
+    addAudit(`${user.name} added a Netradyne recap row for ${selectedNetradyneDate}.`);
+    saveNetradyneRecapRow(row, true);
+    render();
+    showToast("Row added.");
+  }
+
+  function deleteNetradyneRecapRow(id) {
+    const row = netradyneRecaps.find((r) => r.id === id);
+    if (!row) return;
+    if (!window.confirm(`Delete this Netradyne row${row.driverName ? ` for ${row.driverName}` : ""}? This cannot be undone.`)) return;
+    netradyneRecaps = netradyneRecaps.filter((r) => r.id !== id);
+    addAudit(`${getCurrentUser().name} deleted a Netradyne recap row.`);
+    fetch("/api/netradyne-recaps/delete", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+    render();
+    showToast("Row deleted.");
+  }
+
+  const NETRADYNE_SEVERITIES = ["", "Severe", "Moderate", "Low"];
+
+  function renderNetradyneDriverSelect(row, editable) {
+    if (!editable) return `<span>${escapeHtml(row.driverName || "-")}</span>`;
+    const opts = NETRADYNE_DRIVERS.map(([name, id]) =>
+      `<option value="${escapeHtml(id)}" ${row.netradyneDriverId === id ? "selected" : ""}>${escapeHtml(name)}</option>`
+    ).join("");
+    return `
+      <select class="table-control" data-nr-driver data-nr-id="${row.id}">
+        <option value="" ${row.netradyneDriverId ? "" : "selected"}>— Select driver —</option>
+        ${opts}
+      </select>`;
+  }
+
+  function renderNetradyneVehicleSelect(row, editable) {
+    if (!editable) return `<span>${escapeHtml(row.vehicleNumber || "-")}</span>`;
+    const opts = NETRADYNE_TRUCKS.map((t) =>
+      `<option value="${escapeHtml(t)}" ${row.vehicleNumber === t ? "selected" : ""}>${escapeHtml(t)}</option>`
+    ).join("");
+    return `
+      <select class="table-control" data-nr-field="vehicleNumber" data-nr-id="${row.id}">
+        <option value="" ${row.vehicleNumber ? "" : "selected"}>— Select truck —</option>
+        ${opts}
+      </select>`;
+  }
+
+  function nrInput(row, field, editable, type = "text") {
+    if (!editable) return `<span>${escapeHtml(row[field] || "-")}</span>`;
+    return `<input class="table-control" type="${type}" value="${escapeHtml(row[field])}" data-nr-field="${field}" data-nr-id="${row.id}" />`;
+  }
+
+  function renderNetradyneRecapRow(row, index, editable) {
+    return `
+      <tr>
+        <td class="row-number">${index}</td>
+        <td>${nrInput(row, "alertCount", editable)}</td>
+        <td class="driver-cell">${renderNetradyneDriverSelect(row, editable)}</td>
+        <td class="id-cell">${editable ? `<textarea class="nr-id-box" rows="2" data-nr-field="netradyneDriverId" data-nr-id="${row.id}" readonly title="Auto-filled from the selected driver">${escapeHtml(row.netradyneDriverId)}</textarea>` : `<span class="compact">${escapeHtml(row.netradyneDriverId || "-")}</span>`}</td>
+        <td>${nrInput(row, "dateTime", editable, "datetime-local")}</td>
+        <td class="id-cell">${nrInput(row, "sessionId", editable)}</td>
+        <td>${renderNetradyneVehicleSelect(row, editable)}</td>
+        <td>${editable ? `<textarea class="table-control issues-box" rows="3" data-nr-field="observations" data-nr-id="${row.id}">${escapeHtml(row.observations)}</textarea>` : `<span class="compact">${escapeHtml(row.observations || "-")}</span>`}</td>
+        <td>${editable ? `<select class="table-control" data-nr-field="severity" data-nr-id="${row.id}">${NETRADYNE_SEVERITIES.map((s) => `<option value="${escapeHtml(s)}" ${row.severity === s ? "selected" : ""}>${escapeHtml(s || "—")}</option>`).join("")}</select>` : renderNetradyneSevPill(row.severity)}</td>
+        <td>${editable ? `<textarea class="table-control issues-box" rows="3" data-nr-field="disputeNotes" data-nr-id="${row.id}">${escapeHtml(row.disputeNotes)}</textarea>` : `<span class="compact">${escapeHtml(row.disputeNotes || "-")}</span>`}</td>
+        ${editable ? `<td><button class="btn btn-danger btn-small" type="button" data-action="netradyne-recap-delete-row" data-nr-id="${row.id}">Delete</button></td>` : ""}
+      </tr>`;
+  }
+
+  function renderNetradyneSevPill(sev) {
+    if (!sev) return `<span class="pill gray">—</span>`;
+    const cls = sev === "Severe" ? "red" : sev === "Moderate" ? "amber" : "blue";
+    return `<span class="pill ${cls}">${escapeHtml(sev)}</span>`;
+  }
+
+  // Fixed column widths in PIXELS so every field box is comfortably sized. The table
+  // gets an explicit total width and scrolls horizontally only as much as needed
+  // (far less than the daily-recap's 2200px). Last entry = editable-only Actions.
+  function colgroupHtml(widths, editable) {
+    const w = editable ? widths : widths.slice(0, -1);
+    return `<colgroup>${w.map((x) => `<col style="width:${x}px">`).join("")}</colgroup>`;
+  }
+  function fixedTableStyle(widths, editable) {
+    const w = editable ? widths : widths.slice(0, -1);
+    return `style="width:${w.reduce((a, b) => a + b, 0)}px;table-layout:fixed"`;
+  }
+
+  function renderNetradyneRecapTable(rows, editable) {
+    if (!rows.length) {
+      return `<div class="empty-state truck-empty"><div class="truck-empty-icon">📹</div><strong>No Netradyne rows for ${escapeHtml(formatDateLabel(selectedNetradyneDate))}</strong><p>${netradyneRecapSearch.trim() ? "No rows match your search." : (editable ? 'Click "+ Add row" to start one.' : "There is no Netradyne recap for this day.")}</p></div>`;
+    }
+    return `
+      <div class="table-wrap">
+        <table class="recap-table nr-table" ${fixedTableStyle([46, 95, 160, 240, 185, 150, 125, 250, 140, 250, 80], editable)}>
+          ${colgroupHtml([46, 95, 160, 240, 185, 150, 125, 250, 140, 250, 80], editable)}
+          <thead>
+            <tr>
+              <th class="row-number">#</th>
+              <th>Number of Alerts</th>
+              <th>Driver Name</th>
+              <th>Netradyne Driver ID</th>
+              <th>Date and Time</th>
+              <th>Session ID</th>
+              <th>Vehicle Number</th>
+              <th>Observations</th>
+              <th>Severity</th>
+              <th>Dispute Notes</th>
+              ${editable ? "<th>Actions</th>" : ""}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row, i) => renderNetradyneRecapRow(row, i + 1, editable)).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderNetradyneRecapMobileCards(rows, editable) {
+    if (!rows.length) {
+      return `<div class="recap-mobile-cards"><div class="empty-state truck-empty"><div class="truck-empty-icon">📹</div><strong>No Netradyne rows for ${escapeHtml(formatDateLabel(selectedNetradyneDate))}</strong><p>${netradyneRecapSearch.trim() ? "No rows match your search." : "There is no Netradyne recap for this day."}</p></div></div>`;
+    }
+    const field = (label, value) => `<div class="rcv-detail-row"><span>${label}</span><strong>${escapeHtml(value || "–")}</strong></div>`;
+    return `
+      <div class="recap-mobile-cards">
+        ${rows.map((row) => {
+          const isExpanded = expandedRecapIds.has(row.id);
+          return `
+            <article class="recap-card-v2 ${row.severity === "Severe" ? "has-issue" : ""}" data-recap-id="${row.id}">
+              <div class="rcv-header recap-toggle" data-action="toggle-recap-detail" data-recap-id="${row.id}">
+                <div class="rcv-driver">
+                  <div>
+                    <strong class="rcv-name">${escapeHtml(row.driverName || "Unknown driver")}</strong>
+                    <span class="rcv-sub">Truck ${escapeHtml(row.vehicleNumber || "–")} · ${escapeHtml(row.alertCount || "0")} alert(s)</span>
+                  </div>
+                </div>
+                <div class="rcv-badges">
+                  ${renderNetradyneSevPill(row.severity)}
+                  <span class="rcv-expand-icon">${isExpanded ? "▲" : "▼"}</span>
+                </div>
+              </div>
+              <div class="recap-details" style="display:${isExpanded ? "grid" : "none"};">
+                ${field("Number of Alerts", row.alertCount)}
+                ${field("Netradyne Driver ID", row.netradyneDriverId)}
+                ${field("Date and Time", row.dateTime)}
+                ${field("Session ID", row.sessionId)}
+                ${field("Vehicle Number", row.vehicleNumber)}
+                ${field("Observations", row.observations)}
+                ${field("Severity", row.severity)}
+                ${field("Dispute Notes", row.disputeNotes)}
+                ${editable ? `<div class="rcv-detail-row"><button class="btn btn-danger btn-small" type="button" data-action="netradyne-recap-delete-row" data-nr-id="${row.id}">Delete row</button></div>` : ""}
+              </div>
+            </article>`;
+        }).join("")}
+      </div>`;
+  }
+
+  function renderNetradyneRecapPage(user) {
+    const editable = user.role !== "owner";
+    const rows = visibleNetradyneRecaps(user);
+    const adminClientSelect = user.role === "admin"
+      ? `<label class="field compact-field"><span class="field-label">Account</span>
+          <select class="table-control date-select" data-nr-import-client>
+            ${state.clients.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
+          </select></label>`
+      : "";
+    return `
+      <div class="section-title">
+        <div>
+          <h2>Netradyne Recap</h2>
+          <p>Manual log of Netradyne safety events — alerts, sessions, observations, severity, and dispute notes.</p>
+        </div>
+        <div class="actions-row">
+          <button class="btn btn-secondary" type="button" data-action="netradyne-recap-print">Export / Print</button>
+        </div>
+      </div>
+
+      <div class="recap-toolbar">
+        <label class="field compact-field">
+          <span class="field-label">📅 Pick a date</span>
+          <input class="table-control date-select" type="date" data-nr-date-picker value="${escapeHtml(selectedNetradyneDate)}" />
+        </label>
+        <label class="field compact-field" style="flex:1;min-width:160px">
+          <span class="field-label">🔎 Search</span>
+          <input class="table-control" type="search" data-nr-search placeholder="Driver, ID, truck, session, severity…" value="${escapeHtml(netradyneRecapSearch)}" />
+        </label>
+        <div class="day-meta">
+          <span class="pill blue">${escapeHtml(selectedNetradyneDate)}</span>
+          <span>${rows.length} row(s) shown</span>
+        </div>
+        ${editable ? adminClientSelect : ""}
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>Netradyne recap for ${escapeHtml(formatDateLabel(selectedNetradyneDate))}</h3>
+            <p>${rows.length} rows visible.</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="netradyne-recap-add-row">+ Add row</button>` : ""}
+            <span class="pill ${editable ? "green" : "blue"}">${editable ? "Editable" : "Owner view"}</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="recap-table-desktop">
+            ${renderNetradyneRecapTable(rows, editable)}
+          </div>
+          ${renderNetradyneRecapMobileCards(rows, editable)}
+        </div>
+      </div>`;
+  }
+
+  function exportNetradyneRecapPrintable(user) {
+    const rows = visibleNetradyneRecaps(user);
+    const cols = [
+      ["#", (r, i) => i + 1, "col-num"],
+      ["Alerts", (r) => r.alertCount, "col-num"],
+      ["Driver Name", (r) => r.driverName, "wrap col-driver"],
+      ["Netradyne Driver ID", (r) => r.netradyneDriverId, "wrap col-vrids"],
+      ["Date and Time", (r) => r.dateTime, ""],
+      ["Session ID", (r) => r.sessionId, ""],
+      ["Vehicle", (r) => r.vehicleNumber, ""],
+      ["Observations", (r) => r.observations, "wrap col-issues"],
+      ["Severity", (r) => r.severity, ""],
+      ["Dispute Notes", (r) => r.disputeNotes, "wrap col-issues"],
+    ];
+    const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const head = cols.map(([label, , cls]) => `<th class="${cls}">${esc(label)}</th>`).join("");
+    const body = rows.map((r, i) => `<tr>${cols.map(([, fn, cls]) => `<td class="${cls}">${esc(fn(r, i))}</td>`).join("")}</tr>`).join("");
+    const title = `Netradyne Recap — ${formatDateLabel(selectedNetradyneDate)}`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <style>
+        body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111}
+        h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:16px}
+        table{width:100%;border-collapse:collapse;font-size:10px;table-layout:auto}
+        th,td{border:1px solid #bbb;padding:3px 5px;text-align:left;vertical-align:top;white-space:nowrap}
+        th.wrap,td.wrap{white-space:pre-wrap;overflow-wrap:break-word}
+        .col-num{width:1%;text-align:center}
+        .col-driver{min-width:78px;max-width:120px}
+        .col-vrids{max-width:160px}
+        .col-issues{min-width:150px;max-width:280px}
+        th{background:#f0f0f0} tr:nth-child(even) td{background:#fafafa}
+        tr{break-inside:avoid}
+        @media print{@page{size:landscape;margin:8mm}}
+      </style></head><body>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${rows.length} rows · generated ${esc(formatDateForSelectedTimeZone(new Date().toISOString()))} ET</div>
+      <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+      </body></html>`;
+    printHtmlDocument(html);
+  }
+
+  // ================= Dispute Tracker (On Time + Acceptance) =================
+  const DISPUTE_STATUSES = ["Disputed", "Accepted", "Rejected", "Reopened", "Needs escalation to MMPM"];
+  // Acceptance "Rejected from start" categories and their penalty multipliers.
+  const REJECTED_FROM_START = [
+    ["After start time", "8X penalty"],
+    ["0-6 hours", "4X penalty"],
+    ["6+ hours", "1X penalty"],
+  ];
+  function rejectedFromStartPenalty(value) {
+    const hit = REJECTED_FROM_START.find(([label]) => label === value);
+    return hit ? hit[1] : "";
+  }
+  function renderRejectedFromStart(row, editable) {
+    const penalty = rejectedFromStartPenalty(row.rejectedFromStart);
+    if (!editable) {
+      return `<span>${escapeHtml(row.rejectedFromStart || "-")}${penalty ? ` <span class="pill amber">${escapeHtml(penalty)}</span>` : ""}</span>`;
+    }
+    return `<div class="rfs-cell">
+      <select class="table-control" data-dispute-field="rejectedFromStart" data-dispute-id="${row.id}">
+        <option value="" ${row.rejectedFromStart ? "" : "selected"}>—</option>
+        ${REJECTED_FROM_START.map(([label]) => `<option value="${escapeHtml(label)}" ${row.rejectedFromStart === label ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+      </select>
+      ${penalty ? `<span class="rfs-penalty">${escapeHtml(penalty)}</span>` : ""}
+    </div>`;
+  }
+  const ONTIME_TYPES = ["On time to origin", "On time to destination"];
+  const DISPUTE_CASE_URL = "https://relay.amazon.com/cases/details/";
+
+  function disputeClientIdFor(user) {
+    if (user && user.clientId) return user.clientId;
+    if (user && user.role === "admin") {
+      return app.querySelector("[data-dispute-import-client]")?.value || state.clients[0]?.id || null;
+    }
+    return state.clients[0]?.id || null;
+  }
+
+  function visibleDisputes(user) {
+    let rows = disputes.filter((row) => row.kind === disputeTab && row.dailyDate && disputeWeekStartOf(row.dailyDate) === selectedDisputeWeek);
+    if (user.role === "owner" || user.role === "dispatcher") {
+      rows = rows.filter((row) => !user.clientId || row.clientId === user.clientId);
+    }
+    const term = disputeSearch.trim().toLowerCase();
+    if (!term) return rows;
+    const keys = ["caseId", "tripId", "loadId", "run", "driverName", "timestamp", "date", "delayReason", "reasonCode", "penalty", "cancellationReason", "rejectedFromStart", "status", "ontimeType"];
+    return rows.filter((row) => keys.some((k) => String(row[k] || "").toLowerCase().includes(term)));
+  }
+
+  async function loadDisputes() {
+    try {
+      const res = await fetch("/api/disputes", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.disputes)) disputes = data.disputes;
+    } catch (e) {
+      console.warn("Failed to load disputes:", e);
+    }
+  }
+
+  function saveDisputeRow(row, immediate = false) {
+    if (!session || !row || !row.id) return;
+    const send = () => {
+      fetch("/api/disputes/save", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dispute: row }),
+      }).catch(() => {});
+    };
+    clearTimeout(disputeSaveTimers[row.id]);
+    if (immediate) { send(); return; }
+    disputeSaveTimers[row.id] = setTimeout(send, 600);
+  }
+
+  function addDisputeRow(user, kind) {
+    const base = {
+      id: `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      clientId: disputeClientIdFor(user),
+      dailyDate: selectedDisputeWeek,
+      kind,
+      caseId: "",
+      tripId: "",
+      loadId: "",
+      run: "",
+      status: "Disputed",
+    };
+    const row = kind === "ontime"
+      ? { ...base, ontimeType: "On time to destination", driverName: "", timestamp: "", delayReason: "", penalty: "", reasonCode: "" }
+      : { ...base, date: "", cancellationReason: "", rejectedFromStart: "" };
+    disputes.push(row);
+    addAudit(`${user.name} added a ${kind === "ontime" ? "On Time" : "Acceptance"} dispute for week ${disputeWeekNumber(selectedDisputeWeek)}.`);
+    saveDisputeRow(row, true);
+    render();
+    showToast("Row added.");
+  }
+
+  function deleteDisputeRow(id) {
+    const row = disputes.find((r) => r.id === id);
+    if (!row) return;
+    if (!window.confirm(`Delete this dispute${row.caseId ? ` (${row.caseId})` : ""}? This cannot be undone.`)) return;
+    disputes = disputes.filter((r) => r.id !== id);
+    addAudit(`${getCurrentUser().name} deleted a dispute row.`);
+    fetch("/api/disputes/delete", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+    render();
+    showToast("Row deleted.");
+  }
+
+  function dInput(row, field, editable) {
+    if (!editable) return `<span>${escapeHtml(row[field] || "-")}</span>`;
+    return `<input class="table-control" type="text" value="${escapeHtml(row[field])}" data-dispute-field="${field}" data-dispute-id="${row.id}" />`;
+  }
+
+  // Grow-down text box for long free-text fields (delay / cancellation reasons).
+  function dTextarea(row, field, editable) {
+    if (!editable) return `<span>${escapeHtml(row[field] || "-")}</span>`;
+    return `<textarea class="table-control issues-box" rows="2" data-dispute-field="${field}" data-dispute-id="${row.id}">${escapeHtml(row[field])}</textarea>`;
+  }
+
+  // Native date + time picker. Owner view shows a formatted read-only value.
+  function dDateTime(row, field, editable) {
+    if (!editable) return `<span>${escapeHtml(formatDisputeDateTime(row[field]) || "-")}</span>`;
+    return `<input class="table-control" type="datetime-local" value="${escapeHtml(row[field] || "")}" data-dispute-field="${field}" data-dispute-id="${row.id}" />`;
+  }
+
+  // "2026-08-01T02:02" -> "08/01/26 02:02" for read-only display.
+  function formatDisputeDateTime(value) {
+    if (!value) return "";
+    const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (!m) return value;
+    const [, y, mo, d, hh, mm] = m;
+    return `${mo}/${d}/${y.slice(2)} ${hh}:${mm}`;
+  }
+
+  function renderDisputeDriverSelect(row, editable) {
+    if (!editable) return `<span>${escapeHtml(row.driverName || "-")}</span>`;
+    const opts = NETRADYNE_DRIVERS.map(([name]) =>
+      `<option value="${escapeHtml(name)}" ${row.driverName === name ? "selected" : ""}>${escapeHtml(name)}</option>`
+    ).join("");
+    return `
+      <select class="table-control" data-dispute-field="driverName" data-dispute-id="${row.id}">
+        <option value="" ${row.driverName ? "" : "selected"}>— Select driver —</option>
+        ${opts}
+      </select>`;
+  }
+
+  function renderDisputeSelect(row, field, options, editable) {
+    if (!editable) return renderDisputeStatusPill(row[field]);
+    return `
+      <select class="table-control" data-dispute-field="${field}" data-dispute-id="${row.id}">
+        ${options.map((o) => `<option value="${escapeHtml(o)}" ${row[field] === o ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+      </select>`;
+  }
+
+  function renderDisputeStatusPill(status) {
+    if (!status) return `<span class="pill gray">—</span>`;
+    const cls = status === "Accepted" ? "green"
+      : status === "Rejected" ? "red"
+      : status === "Needs escalation to MMPM" ? "red"
+      : status === "Reopened" ? "amber" : "blue";
+    return `<span class="pill ${cls}">${escapeHtml(status)}</span>`;
+  }
+
+  function renderViewDisputeCell(row) {
+    if (!row.caseId) return `<span class="muted">No case ID</span>`;
+    return `<button class="btn btn-secondary btn-small" type="button" data-action="open-dispute" data-case-id="${escapeHtml(row.caseId)}">View Dispute</button>`;
+  }
+
+  function renderOnTimeDisputeTable(rows, editable) {
+    if (!rows.length) return disputeEmptyState(editable);
+    return `
+      <div class="table-wrap">
+        <table class="recap-table dispute-table" ${fixedTableStyle([46, 120, 130, 105, 170, 150, 170, 180, 110, 75, 150, 150, 110, 80], editable)}>
+          ${colgroupHtml([46, 120, 130, 105, 170, 150, 170, 180, 110, 75, 150, 150, 110, 80], editable)}
+          <thead>
+            <tr>
+              <th class="row-number">#</th>
+              <th>Case ID</th>
+              <th>Trip ID</th>
+              <th>Load ID</th>
+              <th>Run</th>
+              <th>Type</th>
+              <th>Driver Name</th>
+              <th>Timestamp</th>
+              <th>Delay</th>
+              <th>Penalty</th>
+              <th>Reason Code</th>
+              <th>Status</th>
+              <th>View Dispute</th>
+              ${editable ? "<th>Actions</th>" : ""}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row, i) => `
+              <tr>
+                <td class="row-number">${i + 1}</td>
+                <td class="id-cell">${dInput(row, "caseId", editable)}</td>
+                <td class="id-cell">${dInput(row, "tripId", editable)}</td>
+                <td class="id-cell">${dInput(row, "loadId", editable)}</td>
+                <td>${dInput(row, "run", editable)}</td>
+                <td>${renderDisputeSelect(row, "ontimeType", ONTIME_TYPES, editable)}</td>
+                <td class="driver-cell">${renderDisputeDriverSelect(row, editable)}</td>
+                <td>${dDateTime(row, "timestamp", editable)}</td>
+                <td>${dInput(row, "delayReason", editable)}</td>
+                <td>${dInput(row, "penalty", editable)}</td>
+                <td>${dInput(row, "reasonCode", editable)}</td>
+                <td>${renderDisputeSelect(row, "status", DISPUTE_STATUSES, editable)}</td>
+                <td>${renderViewDisputeCell(row)}</td>
+                ${editable ? `<td><button class="btn btn-danger btn-small" type="button" data-action="dispute-delete-row" data-dispute-id="${row.id}">Delete</button></td>` : ""}
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderAcceptanceDisputeTable(rows, editable) {
+    if (!rows.length) return disputeEmptyState(editable);
+    return `
+      <div class="table-wrap">
+        <table class="recap-table dispute-table" ${fixedTableStyle([46, 140, 140, 120, 170, 175, 175, 175, 150, 120, 80], editable)}>
+          ${colgroupHtml([46, 140, 140, 120, 170, 175, 175, 175, 150, 120, 80], editable)}
+          <thead>
+            <tr>
+              <th class="row-number">#</th>
+              <th>Case ID</th>
+              <th>Trip ID</th>
+              <th>Load ID</th>
+              <th>Run</th>
+              <th>Date</th>
+              <th>Cancellation Reason</th>
+              <th>Rejected from start</th>
+              <th>Status</th>
+              <th>View Dispute</th>
+              ${editable ? "<th>Actions</th>" : ""}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row, i) => `
+              <tr>
+                <td class="row-number">${i + 1}</td>
+                <td class="id-cell">${dInput(row, "caseId", editable)}</td>
+                <td class="id-cell">${dInput(row, "tripId", editable)}</td>
+                <td class="id-cell">${dInput(row, "loadId", editable)}</td>
+                <td>${dInput(row, "run", editable)}</td>
+                <td>${dDateTime(row, "date", editable)}</td>
+                <td>${dInput(row, "cancellationReason", editable)}</td>
+                <td>${renderRejectedFromStart(row, editable)}</td>
+                <td>${renderDisputeSelect(row, "status", DISPUTE_STATUSES, editable)}</td>
+                <td>${renderViewDisputeCell(row)}</td>
+                ${editable ? `<td><button class="btn btn-danger btn-small" type="button" data-action="dispute-delete-row" data-dispute-id="${row.id}">Delete</button></td>` : ""}
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function disputeEmptyState(editable) {
+    return `<div class="empty-state truck-empty"><div class="truck-empty-icon">📄</div><strong>No ${disputeTab === "ontime" ? "On Time" : "Acceptance"} disputes for week ${disputeWeekNumber(selectedDisputeWeek)} (${escapeHtml(disputeWeekLabel(selectedDisputeWeek))})</strong><p>${disputeSearch.trim() ? "No rows match your search." : (editable ? 'Click "+ Add dispute" to start one.' : "There are no disputes for this week.")}</p></div>`;
+  }
+
+  function renderDisputeMobileCards(rows, editable) {
+    if (!rows.length) return `<div class="recap-mobile-cards">${disputeEmptyState(editable)}</div>`;
+    const field = (label, value) => `<div class="rcv-detail-row"><span>${label}</span><strong>${escapeHtml(value || "–")}</strong></div>`;
+    return `
+      <div class="recap-mobile-cards">
+        ${rows.map((row) => {
+          const isExpanded = expandedRecapIds.has(row.id);
+          const details = row.kind === "ontime"
+            ? [["Trip ID", row.tripId], ["Load ID", row.loadId], ["Run", row.run], ["Type", row.ontimeType], ["Driver", row.driverName], ["Timestamp", formatDisputeDateTime(row.timestamp)], ["Delay Reason", row.delayReason], ["Penalty", row.penalty], ["Reason Code", row.reasonCode]]
+            : [["Trip ID", row.tripId], ["Load ID", row.loadId], ["Run", row.run], ["Date", formatDisputeDateTime(row.date)], ["Cancellation Reason", row.cancellationReason], ["Rejected from start", row.rejectedFromStart ? `${row.rejectedFromStart} (${rejectedFromStartPenalty(row.rejectedFromStart)})` : ""]];
+          return `
+            <article class="recap-card-v2" data-recap-id="${row.id}">
+              <div class="rcv-header recap-toggle" data-action="toggle-recap-detail" data-recap-id="${row.id}">
+                <div class="rcv-driver">
+                  <div>
+                    <strong class="rcv-name">${escapeHtml(row.caseId || "New dispute")}</strong>
+                    <span class="rcv-sub">${escapeHtml(row.run || "–")}</span>
+                  </div>
+                </div>
+                <div class="rcv-badges">
+                  ${renderDisputeStatusPill(row.status)}
+                  <span class="rcv-expand-icon">${isExpanded ? "▲" : "▼"}</span>
+                </div>
+              </div>
+              <div class="recap-details" style="display:${isExpanded ? "grid" : "none"};">
+                ${details.map(([l, v]) => field(l, v)).join("")}
+                <div class="rcv-detail-row">${renderViewDisputeCell(row)}</div>
+                ${editable ? `<div class="rcv-detail-row"><button class="btn btn-danger btn-small" type="button" data-action="dispute-delete-row" data-dispute-id="${row.id}">Delete row</button></div>` : ""}
+              </div>
+            </article>`;
+        }).join("")}
+      </div>`;
+  }
+
+  function renderDisputeTrackerPage(user) {
+    const editable = user.role !== "owner";
+    const rows = visibleDisputes(user);
+    const adminClientSelect = user.role === "admin"
+      ? `<label class="field compact-field"><span class="field-label">Account</span>
+          <select class="table-control date-select" data-dispute-import-client>
+            ${state.clients.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
+          </select></label>`
+      : "";
+    const tab = (id, label) => `<button class="tab-btn ${disputeTab === id ? "active" : ""}" type="button" data-dispute-tab="${id}">${escapeHtml(label)}</button>`;
+    return `
+      <div class="section-title">
+        <div>
+          <h2>Dispute Tracker</h2>
+          <p>Track Amazon Relay disputes — on-time (origin &amp; destination) and acceptance.</p>
+        </div>
+        <div class="actions-row">
+          <div class="tabs">
+            ${tab("ontime", "On Time")}
+            ${tab("acceptance", "Acceptance")}
+          </div>
+          <button class="btn btn-secondary" type="button" data-action="dispute-print">Export / Print</button>
+        </div>
+      </div>
+
+      <div class="recap-toolbar">
+        <div class="dispute-week-nav">
+          <button class="dwn-arrow" type="button" data-action="dispute-week-prev" aria-label="Previous week">‹</button>
+          <div class="dwn-center">
+            <span class="dwn-badge">Week ${disputeWeekNumber(selectedDisputeWeek)}</span>
+            <span class="dwn-range">${escapeHtml(disputeWeekLabel(selectedDisputeWeek))}</span>
+          </div>
+          <button class="dwn-arrow" type="button" data-action="dispute-week-next" aria-label="Next week">›</button>
+          ${disputeWeekStartOf(todayISO()) !== selectedDisputeWeek ? `<button class="dwn-today" type="button" data-action="dispute-week-today">Today</button>` : ""}
+        </div>
+        <label class="field compact-field" style="flex:1;min-width:160px">
+          <span class="field-label">🔎 Search</span>
+          <input class="table-control" type="search" data-dispute-search placeholder="Case ID, trip, load, run, driver, status…" value="${escapeHtml(disputeSearch)}" />
+        </label>
+        <div class="day-meta">
+          <span>${rows.length} row(s) shown</span>
+        </div>
+        ${editable ? adminClientSelect : ""}
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>${disputeTab === "ontime" ? "On Time" : "Acceptance"} disputes — Week ${disputeWeekNumber(selectedDisputeWeek)} (${escapeHtml(disputeWeekLabel(selectedDisputeWeek))})</h3>
+            <p>${rows.length} rows visible.</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${editable ? `<button class="btn btn-secondary btn-small" type="button" data-action="dispute-import">Import (paste)</button>` : ""}
+            ${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="dispute-add-row">+ Add dispute</button>` : ""}
+            <span class="pill ${editable ? "green" : "blue"}">${editable ? "Editable" : "Owner view"}</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="recap-table-desktop">
+            ${disputeTab === "ontime" ? renderOnTimeDisputeTable(rows, editable) : renderAcceptanceDisputeTable(rows, editable)}
+          </div>
+          ${renderDisputeMobileCards(rows, editable)}
+        </div>
+      </div>`;
+  }
+
+  function exportDisputePrintable(user) {
+    const rows = visibleDisputes(user);
+    const cols = disputeTab === "ontime"
+      ? [
+          ["#", (r, i) => i + 1, "col-num"],
+          ["Case ID", (r) => r.caseId, ""],
+          ["Trip ID", (r) => r.tripId, ""],
+          ["Load ID", (r) => r.loadId, ""],
+          ["Run", (r) => r.run, ""],
+          ["Type", (r) => r.ontimeType, ""],
+          ["Driver Name", (r) => r.driverName, "wrap col-driver"],
+          ["Timestamp", (r) => formatDisputeDateTime(r.timestamp), ""],
+          ["Delay Reason", (r) => r.delayReason, "wrap col-issues"],
+          ["Penalty", (r) => r.penalty, "col-num"],
+          ["Reason Code", (r) => r.reasonCode, ""],
+          ["Status", (r) => r.status, ""],
+        ]
+      : [
+          ["#", (r, i) => i + 1, "col-num"],
+          ["Case ID", (r) => r.caseId, ""],
+          ["Trip ID", (r) => r.tripId, ""],
+          ["Load ID", (r) => r.loadId, ""],
+          ["Run", (r) => r.run, ""],
+          ["Date", (r) => formatDisputeDateTime(r.date), ""],
+          ["Cancellation Reason", (r) => r.cancellationReason, "wrap col-issues"],
+          ["Rejected from start", (r) => (r.rejectedFromStart ? `${r.rejectedFromStart} (${rejectedFromStartPenalty(r.rejectedFromStart)})` : ""), ""],
+          ["Status", (r) => r.status, ""],
+        ];
+    const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const head = cols.map(([label, , cls]) => `<th class="${cls}">${esc(label)}</th>`).join("");
+    const body = rows.map((r, i) => `<tr>${cols.map(([, fn, cls]) => `<td class="${cls}">${esc(fn(r, i))}</td>`).join("")}</tr>`).join("");
+    const title = `Dispute Tracker (${disputeTab === "ontime" ? "On Time" : "Acceptance"}) — Week ${disputeWeekNumber(selectedDisputeWeek)} · ${disputeWeekLabel(selectedDisputeWeek)}`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <style>
+        body{font-family:Arial,Helvetica,sans-serif;margin:24px;color:#111}
+        h1{font-size:18px;margin:0 0 4px} .sub{color:#666;font-size:12px;margin-bottom:16px}
+        table{width:100%;border-collapse:collapse;font-size:10px;table-layout:auto}
+        th,td{border:1px solid #bbb;padding:3px 5px;text-align:left;vertical-align:top;white-space:nowrap}
+        th.wrap,td.wrap{white-space:pre-wrap;overflow-wrap:break-word}
+        .col-num{width:1%;text-align:center}
+        .col-driver{min-width:78px;max-width:120px}
+        .col-issues{min-width:150px;max-width:280px}
+        th{background:#f0f0f0} tr:nth-child(even) td{background:#fafafa}
+        tr{break-inside:avoid}
+        @media print{@page{size:landscape;margin:8mm}}
+      </style></head><body>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${rows.length} rows · generated ${esc(formatDateForSelectedTimeZone(new Date().toISOString()))} ET</div>
+      <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+      </body></html>`;
+    printHtmlDocument(html);
+  }
+
+  // ---- Dispute import (paste from Relay) ----
+  // Convert "08/01/26" + "02:02 EDT" -> "2026-08-01T02:02" (datetime-local; tz dropped).
+  function disputePasteToLocalDateTime(dateStr, timeStr) {
+    if (!dateStr) return "";
+    const m = String(dateStr).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (!m) return "";
+    let [, mo, da, yr] = m;
+    yr = yr.length === 2 ? "20" + yr : yr;
+    mo = mo.padStart(2, "0"); da = da.padStart(2, "0");
+    let hh = "00", mm = "00";
+    if (timeStr) {
+      const t = String(timeStr).match(/(\d{1,2}):(\d{2})/);
+      if (t) { hh = t[1].padStart(2, "0"); mm = t[2]; }
+    }
+    return `${yr}-${mo}-${da}T${hh}:${mm}`;
+  }
+
+  // Match a pasted driver name to a roster option, tolerating middle names,
+  // suffixes (JR/III), punctuation and apostrophes (e.g. "Willie LOUIS Irby JR"
+  // -> "Willie Irby", "Jennifer Luavail Woods" -> "Jennifer Woods").
+  function matchDisputeDriver(raw) {
+    if (!raw) return "";
+    const SUFFIX = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+    const clean = (s) => s.toLowerCase().replace(/\(.*?\)/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const toks = (s) => clean(s).split(" ").filter((w) => w && !SUFFIX.has(w));
+    const rawN = clean(raw);
+    const rawT = toks(raw);
+    if (!rawT.length) return raw;
+    const first = rawT[0], last = rawT[rawT.length - 1];
+    const rawSet = new Set(rawT);
+
+    const find = (fn) => NETRADYNE_DRIVERS.find(([name]) => fn(toks(name)));
+    let hit =
+      NETRADYNE_DRIVERS.find(([name]) => clean(name) === rawN) ||                                   // 1. exact
+      find((t) => t[0] === first && t[t.length - 1] === last) ||                                    // 2. same first + last
+      find((t) => t[t.length - 1] === last && (t[0].startsWith(first) || first.startsWith(t[0]))) || // 3. last + first-prefix
+      find((t) => t.length && t.every((w) => rawSet.has(w)));                                        // 4. roster tokens ⊆ pasted
+    return hit ? hit[0] : raw;
+  }
+
+  // Turn "ATL40  MGEY" (or "HSV2 -> BHM1") into "ATL40 -> MGEY".
+  function normalizeRun(t) {
+    if (!t) return "";
+    const parts = t.split(/\s*(?:->|→)\s*|\s{2,}/).map((s) => s.trim()).filter(Boolean);
+    return parts.length >= 2 ? parts.join(" -> ") : t.trim();
+  }
+
+  // Parse pasted Relay text into partial dispute rows. Records are split at each
+  // Trip ID (T-…). Case ID (the Relay case number from the URL) and Status are NOT
+  // in the paste and stay manual.
+  function parseDisputePaste(text, kind) {
+    const tokens = String(text)
+      .split(/[\t\n\r]+/).map((t) => t.trim())
+      .filter(Boolean)
+      .filter((t) => !/^(view\s+)?dispute$/i.test(t));
+    const isTrip = (t) => /^T-[A-Z0-9]{6,}$/i.test(t);   // Trip ID: "T-112LN58YK"
+    const isLoad = (t) => /^11[A-Z0-9]{5,}$/i.test(t);   // Load ID: "114MZ4VGW"
+    const isDate = (t) => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(t);
+    const isTime = (t) => /^\d{1,2}:\d{2}/.test(t);
+    const isRun = (t) => /->|→/.test(t) || /\S\s{2,}\S/.test(t);
+    const isPenalty = (t) => /^\d+$/.test(t);
+
+    const records = [];
+    let cur = null;
+    for (const tk of tokens) {
+      if (isTrip(tk)) { cur = [tk]; records.push(cur); }
+      else if (cur) cur.push(tk); // ignore tokens before the first Trip ID
+    }
+
+    return records.map((rec) => {
+      const firstDateIdx = rec.findIndex(isDate);
+      const head = firstDateIdx === -1 ? rec : rec.slice(0, firstDateIdx);
+      let lastTimeIdx = -1;
+      rec.forEach((t, i) => { if (isTime(t)) lastTimeIdx = i; });
+      const tail = lastTimeIdx === -1 ? [] : rec.slice(lastTimeIdx + 1);
+      const dates = rec.filter(isDate);
+      const times = rec.filter(isTime);
+      const tripId = rec.find(isTrip) || "";
+      const loadId = rec.find(isLoad) || "";
+      const run = normalizeRun(head.find(isRun) || "");
+
+      if (kind === "ontime") {
+        const driver = head.find((t) => /[A-Za-z]{2,}\s+[A-Za-z]/.test(t) && !isRun(t) && !isTrip(t)) || "";
+        const timestamp = disputePasteToLocalDateTime(dates[0], times[0]);
+        const delayReason = tail.find((t) => /min/i.test(t) || /^\d+\s*-\s*\d+/.test(t)) || "";
+        const penalty = tail.find(isPenalty) || "";
+        const reasonCode = tail.find((t) => /[A-Za-z]{3,}/.test(t) && t !== delayReason && !isPenalty(t)) || "";
+        return { tripId, loadId, run, driverName: matchDisputeDriver(driver), timestamp, delayReason, penalty, reasonCode, ontimeType: "On time to destination" };
+      }
+      const date = disputePasteToLocalDateTime(dates[0], times[0]);
+      // The paste often carries a rejected-from-start category ("After start time",
+      // "0-6 hours", "6+ hours"); pull it out and treat the rest as the reason.
+      const asCategory = (t) => {
+        const n = t.toLowerCase().replace(/\s+/g, " ").trim();
+        if (n.includes("after start")) return "After start time";
+        if (/0\s*-\s*6/.test(n)) return "0-6 hours";
+        if (/6\s*\+|6\s*plus|6\+\s*hour/.test(n)) return "6+ hours";
+        return "";
+      };
+      let rejectedFromStart = "", cancellationReason = "";
+      for (const t of tail) {
+        const cat = asCategory(t);
+        if (cat && !rejectedFromStart) rejectedFromStart = cat;
+        else cancellationReason = t;
+      }
+      return { tripId, loadId, run, date, cancellationReason, rejectedFromStart };
+    });
+  }
+
+  function openDisputeImport(user) {
+    const kind = disputeTab;
+    const overlay = document.createElement("div");
+    overlay.className = "dispute-import-overlay";
+    overlay.innerHTML = `
+      <div class="dispute-import-modal">
+        <h3>Import ${kind === "ontime" ? "On Time" : "Acceptance"} disputes</h3>
+        <p class="muted">Paste rows copied from Relay. <strong>Case ID</strong> and <strong>Status</strong> are left blank/default; everything else is filled in automatically. One row is added per Case ID.</p>
+        <textarea class="dispute-import-text" rows="10" placeholder="Paste here…"></textarea>
+        <div class="dispute-import-actions">
+          <button class="btn btn-secondary" type="button" data-imp-cancel>Cancel</button>
+          <button class="btn btn-primary" type="button" data-imp-go>Import</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector("[data-imp-cancel]").addEventListener("click", close);
+    overlay.querySelector(".dispute-import-text").focus();
+    overlay.querySelector("[data-imp-go]").addEventListener("click", () => {
+      const text = overlay.querySelector(".dispute-import-text").value;
+      const parsed = parseDisputePaste(text, kind);
+      if (!parsed.length) { showToast("Nothing to import — no Case IDs (T-…) found."); return; }
+      parsed.forEach((p, i) => {
+        const base = {
+          id: `d-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
+          clientId: disputeClientIdFor(user), dailyDate: selectedDisputeWeek, kind,
+          caseId: "", status: "Disputed",
+        };
+        const row = kind === "ontime"
+          ? { ...base, ontimeType: p.ontimeType || "On time to destination", driverName: p.driverName || "", timestamp: p.timestamp || "", delayReason: p.delayReason || "", penalty: p.penalty || "", reasonCode: p.reasonCode || "", tripId: p.tripId || "", loadId: p.loadId || "", run: p.run || "" }
+          : { ...base, tripId: p.tripId || "", loadId: p.loadId || "", run: p.run || "", date: p.date || "", cancellationReason: p.cancellationReason || "", rejectedFromStart: p.rejectedFromStart || "" };
+        disputes.push(row);
+        saveDisputeRow(row, true);
+      });
+      addAudit(`${user.name} imported ${parsed.length} ${kind === "ontime" ? "On Time" : "Acceptance"} dispute(s).`);
+      close();
+      render();
+      showToast(`Imported ${parsed.length} row(s). Add Case ID + Status to finish.`);
+    });
+  }
+
   function availableRecapDates(user) {
     const dates = new Set();
     state.recapDays.forEach((day) => {
@@ -887,7 +1903,7 @@ function renderNetradyneDashboard(user) {
   // when it would disrupt the user: while typing, or on data-entry/detail views where
   // a rebuild wipes what they're doing (e.g. daily recap). Data still updates in state
   // and the view refreshes when they navigate or interact.
-  const DATA_ENTRY_VIEWS = ["recap", "owner-recap", "dispatcher-recap", "users", "clients", "announcements", "settings"];
+  const DATA_ENTRY_VIEWS = ["recap", "owner-recap", "dispatcher-recap", "netradyne-recap", "dispute-tracker", "users", "clients", "announcements", "settings"];
   function backgroundRender() {
     if (currentView === "login") return;
     const ae = document.activeElement;
@@ -1143,6 +2159,8 @@ function renderTopbar(user) {
       return [
         { id: "dashboard", label: "Command Center", icon: "dashboard" },
         { id: "recap", label: "Daily Recap", icon: "recap" },
+        { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
+        { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
         { id: "users", label: "Users", icon: "users" },
         { id: "clients", label: "Clients", icon: "clients" },
         { id: "announcements", label: "Announcements", icon: "announcements" },
@@ -1155,6 +2173,8 @@ function renderTopbar(user) {
         { id: "owner-hos", label: "HOS Risks", icon: "owner-hos" },
         { id: "owner-recap", label: "Daily Recap", icon: "recap" },
         { id: 'netradyne-dashboard', label: 'Netradyne Alerts', icon: 'netradyne-dashboard' },
+        { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
+        { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
         { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       ];
     }
@@ -1162,6 +2182,8 @@ function renderTopbar(user) {
       { id: "my-shifts", label: "My Shifts", icon: "my-shifts" },
       { id: "owner-hos", label: "HOS Risks", icon: "owner-hos" },
       { id: "netradyne-dashboard", label: "Netradyne Alerts", icon: "netradyne-dashboard" },
+      { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
+      { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
       { id: "dispatcher-recap", label: "Daily Recap", icon: "recap" },
       { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       { id: "takeover", label: "Takeover Board", icon: "takeover" },
@@ -1182,6 +2204,8 @@ function renderTopbar(user) {
   function renderView(user) {
     if (currentView === "dashboard") return renderAdminDashboard(user);
     if (currentView === 'netradyne-dashboard') return renderNetradyneDashboard(user);
+    if (currentView === 'netradyne-recap') return renderNetradyneRecapPage(user);
+    if (currentView === 'dispute-tracker') return renderDisputeTrackerPage(user);
     if (currentView === "recap" || currentView === "owner-recap" || currentView === "dispatcher-recap") {
       return renderRecapPage(user);
     }
@@ -2627,7 +3651,6 @@ function renderRecapPage(user) {
               <th class="row-number">#</th>
               <th>Driver Assigned</th>
               <th>Trip Date</th>
-              <th>Status</th>
               <th>Trip ID</th>
               <th>Block ID</th>
               <th>VRIDs</th>
@@ -2683,13 +3706,11 @@ function renderRecapMobileCards(rows) {
                 </div>
               </div>
               <div class="rcv-badges">
-                ${renderStatusPill(row.status)}
                 <span class="rcv-issue-badge ${hasIssue ? 'issue' : 'clean'}">${hasIssue ? '⚠' : '✓'}</span>
                 <span class="rcv-expand-icon">${isExpanded ? '▲' : '▼'}</span>
               </div>
             </div>
             <div class="recap-details" style="display:${isExpanded ? 'grid' : 'none'};">
-              ${field('Status', row.status)}
               ${field('Trip ID', row.tripId)}
               ${field('Block ID', row.blockId)}
               ${field('VRIDs', (row.vrids && row.vrids.length) ? row.vrids.join(', ') : '–')}
@@ -2718,7 +3739,6 @@ function renderRecapMobileCards(rows) {
         <td class="row-number">${index}</td>
         <td class="driver-cell">${control("driverAssigned")}</td>
         <td>${control("tripDate")}</td>
-        <td>${editable ? renderSelectControl(row, "status", ["Upcoming", "In Progress", "Completed", "Delayed"]) : renderStatusPill(row.status)}</td>
         <td class="id-cell">${control("tripId")}</td>
         <td class="id-cell">${control("blockId")}</td>
         <td class="vrids">${renderVrids(row, editable)}</td>
@@ -2948,7 +3968,6 @@ function makeStartingMessage(row) {
       ["#", (r, i) => i + 1, "col-num"],
       ["Driver", (r) => r.driverAssigned, "wrap col-driver"],
       ["Trip Date", (r) => r.tripDate, ""],
-      ["Status", (r) => r.status, ""],
       ["Trip ID", (r) => r.tripId, ""],
       ["Block ID", (r) => r.blockId, ""],
       ["VRIDs", (r) => (Array.isArray(r.vrids) ? r.vrids.join(", ") : ""), "wrap col-vrids"],
@@ -4216,6 +5235,14 @@ if (sortBtn && currentView === 'netradyne-dashboard') {
       if (["recap", "owner-recap", "dispatcher-recap"].includes(currentView)) {
         selectedRecapDate = todayISO();
       }
+      if (currentView === "netradyne-recap") {
+        selectedNetradyneDate = todayISO();
+        loadNetradyneRecaps().then(render);
+      }
+      if (currentView === "dispute-tracker") {
+        selectedDisputeWeek = disputeWeekStartOf(todayISO());
+        loadDisputes().then(render);
+      }
       sidebarOpen = false;
       render();
       if (currentView === "owner-hos" && ["owner", "dispatcher"].includes(getCurrentUser()?.role)) {
@@ -4229,6 +5256,13 @@ if (sortBtn && currentView === 'netradyne-dashboard') {
     const filter = event.target.closest("[data-filter]");
     if (filter) {
       recapFilter = filter.dataset.filter;
+      render();
+      return;
+    }
+
+    const disputeTabBtn = event.target.closest("[data-dispute-tab]");
+    if (disputeTabBtn) {
+      disputeTab = disputeTabBtn.dataset.disputeTab;
       render();
       return;
     }
@@ -4325,6 +5359,44 @@ case "hos-close-filters":
       case "recap-print":
         exportRecapPrintable(user);
         break;
+      case "netradyne-recap-add-row":
+        addNetradyneRecapRow(user);
+        break;
+      case "netradyne-recap-delete-row":
+        deleteNetradyneRecapRow(action.dataset.nrId);
+        break;
+      case "netradyne-recap-print":
+        exportNetradyneRecapPrintable(user);
+        break;
+      case "dispute-add-row":
+        addDisputeRow(user, disputeTab);
+        break;
+      case "dispute-delete-row":
+        deleteDisputeRow(action.dataset.disputeId);
+        break;
+      case "dispute-print":
+        exportDisputePrintable(user);
+        break;
+      case "dispute-import":
+        openDisputeImport(user);
+        break;
+      case "dispute-week-prev":
+        selectedDisputeWeek = isoAddDays(selectedDisputeWeek, -7);
+        render();
+        break;
+      case "dispute-week-next":
+        selectedDisputeWeek = isoAddDays(selectedDisputeWeek, 7);
+        render();
+        break;
+      case "dispute-week-today":
+        selectedDisputeWeek = disputeWeekStartOf(todayISO());
+        render();
+        break;
+      case "open-dispute": {
+        const caseId = action.dataset.caseId;
+        if (caseId) window.open(DISPUTE_CASE_URL + encodeURIComponent(caseId), "_blank", "noopener");
+        break;
+      }
       case "truck-print":
         exportTruckPrintable();
         break;
@@ -4442,6 +5514,51 @@ case "hos-close-filters":
     }
 
 
+    const nrDatePicker = event.target.closest("[data-nr-date-picker]");
+    if (nrDatePicker) {
+      if (nrDatePicker.value) selectedNetradyneDate = nrDatePicker.value;
+      render();
+      return;
+    }
+
+    const nrDriver = event.target.closest("[data-nr-driver]");
+    if (nrDriver) {
+      const row = netradyneRecaps.find((r) => r.id === nrDriver.dataset.nrId);
+      if (!row) return;
+      const id = nrDriver.value;
+      const match = NETRADYNE_DRIVERS.find(([, driverId]) => driverId === id);
+      row.netradyneDriverId = id;
+      row.driverName = match ? match[0] : "";
+      addAudit(`${getCurrentUser().name} set Netradyne driver to ${row.driverName || "—"}.`);
+      saveNetradyneRecapRow(row, true);
+      render(); // re-render so the auto-filled ID field updates
+      return;
+    }
+
+    const nrField = event.target.closest("[data-nr-field]");
+    if (nrField) {
+      const row = netradyneRecaps.find((r) => r.id === nrField.dataset.nrId);
+      if (!row) return;
+      if (nrField.classList.contains("issues-box")) autoGrowTextarea(nrField);
+      row[nrField.dataset.nrField] = nrField.value;
+      saveNetradyneRecapRow(row);
+      // No full re-render — keep focus/cursor while typing. Severity is a select,
+      // which loses no cursor, so only re-render for it to refresh the pill.
+      if (nrField.dataset.nrField === "severity" && getCurrentUser()?.role === "owner") render();
+      return;
+    }
+
+    const disputeField = event.target.closest("[data-dispute-field]");
+    if (disputeField) {
+      const row = disputes.find((r) => r.id === disputeField.dataset.disputeId);
+      if (!row) return;
+      row[disputeField.dataset.disputeField] = disputeField.value;
+      saveDisputeRow(row);
+      // Status/type are selects; re-render so pills and the View button (caseId) refresh.
+      if (["status", "ontimeType", "rejectedFromStart"].includes(disputeField.dataset.disputeField)) render();
+      return;
+    }
+
     const recapField = event.target.closest("[data-recap-field]");
     if (recapField) {
       const row = state.recaps.find((item) => item.id === recapField.dataset.recapId);
@@ -4541,6 +5658,22 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
   return;
 }
 
+    const nrSearch = event.target.closest("[data-nr-search]");
+    if (nrSearch && currentView === "netradyne-recap") {
+      netradyneRecapSearch = nrSearch.value;
+      window.clearTimeout(handleInput.searchTimer);
+      handleInput.searchTimer = window.setTimeout(render, 120);
+      return;
+    }
+
+    const disputeSearchInput = event.target.closest("[data-dispute-search]");
+    if (disputeSearchInput && currentView === "dispute-tracker") {
+      disputeSearch = disputeSearchInput.value;
+      window.clearTimeout(handleInput.searchTimer);
+      handleInput.searchTimer = window.setTimeout(render, 120);
+      return;
+    }
+
     const search = event.target.closest("[data-search]");
     if (!search) return;
     searchText = search.value;
@@ -4567,6 +5700,8 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       render();
       await loadAccountsAndUsers();
       await loadRecaps();
+      await loadNetradyneRecaps();
+      await loadDisputes();
       await loadDownTrucks();
       render();
       refreshPushSubscription();

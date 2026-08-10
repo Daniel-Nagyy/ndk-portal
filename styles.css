@@ -4721,6 +4721,147 @@ textarea.table-control {
   white-space: pre-wrap;
 }
 
+/* ===== Netradyne Recap + Dispute Tracker: compact, fits-to-width tables =====
+   These reuse .recap-table but must NOT inherit its 2200px min-width. Instead they
+   fill the container (table-layout:fixed) so nothing overflows sideways; cells that
+   hold a lot of data (long IDs, notes) wrap and grow DOWN instead of pushing width. */
+.recap-table.nr-table,
+.recap-table.dispute-table {
+  /* Inline width (sum of pixel columns) is set per-table in JS; drop the 2200px. */
+  min-width: 0;
+  table-layout: fixed;
+}
+.nr-table th, .dispute-table th { padding: 10px 10px; font-size: 0.72rem; }
+.nr-table td, .dispute-table td { padding: 9px 10px; font-size: 0.9rem; vertical-align: top; }
+
+/* Every field fills its (fixed pixel-width) column. */
+.nr-table .table-control,
+.dispute-table .table-control {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  font-size: 0.9rem;
+}
+/* Text-heavy boxes are roomy and grow taller with their content, never wider. */
+.nr-table textarea.table-control,
+.dispute-table textarea.table-control {
+  field-sizing: content;
+  min-height: 84px;
+  max-height: none;
+  overflow: hidden;
+  resize: vertical;
+  white-space: pre-wrap;
+  line-height: 1.4;
+}
+/* Long Netradyne Driver ID (≈90 chars, no spaces): wrap onto multiple lines. */
+.nr-id-box {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 7px;
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.3;
+  word-break: break-all;
+  white-space: normal;
+  resize: vertical;
+  min-height: 48px;
+}
+/* Read-only cell values wrap too, so owner view never overflows sideways. */
+.nr-table td span, .dispute-table td span { word-break: break-word; overflow-wrap: anywhere; }
+.nr-table .id-cell span, .dispute-table .id-cell span { word-break: break-all; font-size: 0.78rem; }
+
+/* On phones these become the mobile cards already; keep any fallback table scrollable. */
+@media (max-width: 720px) {
+  .nr-table th, .dispute-table th,
+  .nr-table td, .dispute-table td { font-size: 0.75rem; }
+}
+
+/* Netradyne: give the taller boxes (Dispute Notes, Observations) more height. */
+.nr-table textarea.table-control { min-height: 96px; }
+/* Netradyne severity select + datetime should fill their (now wider) columns. */
+.nr-table select.table-control,
+.nr-table input[type="datetime-local"].table-control { width: 100%; min-width: 0; }
+
+/* Dispute Tracker: datetime pickers and text boxes fill their columns. */
+.dispute-table input[type="datetime-local"].table-control { width: 100%; min-width: 0; }
+.dispute-table textarea.table-control { min-height: 84px; }
+/* Netradyne Driver ID box: taller so the long token is readable. */
+.nr-id-box { min-height: 66px; }
+
+/* Dispute Tracker: "Rejected from start" cell (select + penalty badge) */
+.rfs-cell { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+.rfs-penalty {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: rgba(245, 170, 66, 0.16); border: 1px solid rgba(245, 170, 66, 0.4);
+  color: #f5c07a; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.02em;
+}
+
+/* Dispute Tracker week navigator */
+.dispute-week-nav {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px; border-radius: 14px;
+  background: rgba(13, 20, 28, 0.6);
+  border: 1px solid rgba(196, 214, 232, 0.12);
+}
+.dwn-arrow {
+  width: 34px; height: 34px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px; cursor: pointer;
+  border: 1px solid rgba(196, 214, 232, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: #cdd9e6; font-size: 1.15rem; line-height: 1;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.dwn-arrow:hover {
+  background: rgba(90, 150, 255, 0.16);
+  border-color: rgba(120, 170, 255, 0.5);
+  color: #fff;
+}
+.dwn-arrow:active { transform: translateY(1px); }
+.dwn-center {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; min-width: 132px; padding: 2px 10px;
+}
+.dwn-badge {
+  font-size: 0.9rem; font-weight: 800; letter-spacing: 0.02em;
+  color: #eaf2fb;
+}
+.dwn-range {
+  font-size: 0.74rem; font-weight: 600; letter-spacing: 0.03em;
+  text-transform: uppercase; color: #8fa3b8;
+}
+.dwn-today {
+  margin-left: 2px; padding: 7px 12px; border-radius: 10px; cursor: pointer;
+  border: 1px solid rgba(120, 170, 255, 0.35);
+  background: rgba(90, 150, 255, 0.14);
+  color: #dbe8ff; font-size: 0.78rem; font-weight: 700;
+  transition: background 0.15s ease;
+}
+.dwn-today:hover { background: rgba(90, 150, 255, 0.26); }
+
+/* Dispute import modal */
+.dispute-import-overlay {
+  position: fixed; inset: 0; z-index: 4000;
+  background: rgba(4, 8, 13, 0.72);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.dispute-import-modal {
+  background: #10171f; border: 1px solid rgba(196, 214, 232, 0.16);
+  border-radius: 14px; padding: 20px; width: min(640px, 100%);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.dispute-import-modal h3 { margin: 0 0 6px; color: var(--text); }
+.dispute-import-modal p { margin: 0 0 12px; font-size: 0.85rem; }
+.dispute-import-text {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: #0b1219; color: #e9f0f7;
+  border: 1px solid rgba(196, 214, 232, 0.18); border-radius: 10px;
+  padding: 10px 12px; font-family: monospace; font-size: 0.82rem; line-height: 1.4;
+}
+.dispute-import-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+
 /* ===== Targeted UI spacing fixes ===== */
 
 /* Mobile sidebar: push nav below the absolute close button, more space between items. */

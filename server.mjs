@@ -14,6 +14,8 @@ import {
   listUsers, createUser, saveSubscription, changePassword, getUserById, getAccountCredentials,
   getSubscriptionsForAccount, listAllSubscriptions, deleteSubscriptionByEndpoint,
   getRecaps, syncRecaps, getRecapById, deleteRecap, getDbOverview,
+  getNetradyneRecaps, syncNetradyneRecaps, getNetradyneRecapById, deleteNetradyneRecap,
+  getDisputes, syncDisputes, getDisputeById, deleteDispute,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
@@ -757,6 +759,110 @@ const requestHandler = (req, res) => {  // CORS Headers
           }
         }
         const changes = deleteRecap(body.id);
+        sendJson(200, { success: true, deleted: changes });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
+      }
+    })();
+    return;
+  }
+
+  // ---------- Netradyne Recaps (mirror of daily recaps: dispatch edits, owner views) ----------
+  if (url.pathname === '/api/netradyne-recaps' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+    const filterAccountId = (authUser.role === 'superadmin' || authUser.role === 'admin') ? null : authUser.account_id;
+    const recaps = getNetradyneRecaps(filterAccountId);
+    return sendJson(200, { success: true, recaps });
+  }
+
+  if (url.pathname === '/api/netradyne-recaps/save' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const body = await readJsonBody(req);
+        const r = body.recap || body;
+        if (!r || !r.id) return sendJson(400, { success: false, error: 'recap id required' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+        if (!isAdmin) r.clientId = authUser.account_id; // pin non-admins to their account
+        if (!r.clientId || !r.dailyDate) return sendJson(400, { success: false, error: 'clientId and dailyDate required' });
+        syncNetradyneRecaps([r]);
+        sendJson(200, { success: true, id: r.id });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
+      }
+    })();
+    return;
+  }
+
+  if (url.pathname === '/api/netradyne-recaps/delete' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const body = await readJsonBody(req);
+        if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+        if (!isAdmin) {
+          const existing = getNetradyneRecapById(body.id);
+          if (existing && existing.clientId && existing.clientId !== authUser.account_id) {
+            return sendJson(403, { success: false, error: 'Forbidden' });
+          }
+        }
+        const changes = deleteNetradyneRecap(body.id);
+        sendJson(200, { success: true, deleted: changes });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
+      }
+    })();
+    return;
+  }
+
+  // ---------- Disputes (Dispute Tracker: dispatch edits, owner views) ----------
+  if (url.pathname === '/api/disputes' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+    const filterAccountId = (authUser.role === 'superadmin' || authUser.role === 'admin') ? null : authUser.account_id;
+    const disputes = getDisputes(filterAccountId);
+    return sendJson(200, { success: true, disputes });
+  }
+
+  if (url.pathname === '/api/disputes/save' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const body = await readJsonBody(req);
+        const r = body.dispute || body;
+        if (!r || !r.id) return sendJson(400, { success: false, error: 'dispute id required' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+        if (!isAdmin) r.clientId = authUser.account_id;
+        if (!r.clientId || !r.dailyDate) return sendJson(400, { success: false, error: 'clientId and dailyDate required' });
+        syncDisputes([r]);
+        sendJson(200, { success: true, id: r.id });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
+      }
+    })();
+    return;
+  }
+
+  if (url.pathname === '/api/disputes/delete' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const body = await readJsonBody(req);
+        if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+        if (!isAdmin) {
+          const existing = getDisputeById(body.id);
+          if (existing && existing.clientId && existing.clientId !== authUser.account_id) {
+            return sendJson(403, { success: false, error: 'Forbidden' });
+          }
+        }
+        const changes = deleteDispute(body.id);
         sendJson(200, { success: true, deleted: changes });
       } catch (e) {
         sendJson(500, { success: false, error: simplifyError(e) });
