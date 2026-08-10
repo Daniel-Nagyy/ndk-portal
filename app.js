@@ -682,7 +682,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     if (!user) return "login";
     if (user.role === "admin") return "dashboard";
     if (user.role === "owner") return "owner-mobile";
-    return "my-shifts";
+    return "owner-mobile";
   }
 
   function roleLabel(role) {
@@ -2183,21 +2183,23 @@ function renderTopbar(user) {
       ];
     }
     return [
-      { id: "my-shifts", label: "My Shifts", icon: "my-shifts" },
+      { id: "owner-mobile", label: "Home", icon: "owner-mobile" },
       { id: "owner-hos", label: "HOS Risks", icon: "owner-hos" },
       { id: "netradyne-dashboard", label: "Netradyne Alerts", icon: "netradyne-dashboard" },
       { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
       { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
       { id: "dispatcher-recap", label: "Daily Recap", icon: "recap" },
       { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
-      { id: "takeover", label: "Takeover Board", icon: "takeover" },
-      { id: "announcements", label: "Announcements", icon: "announcements" },
       ...shared,
     ];
   }
 
   function isAllowedView(user, view) {
-    return getNavItems(user.role).some((item) => item.id === view);
+    if (getNavItems(user.role).some((item) => item.id === view)) return true;
+    // Dispatchers use the owner Home page, whose KPI links point at owner-recap;
+    // allow that alias (it renders the same recap, editable for dispatchers).
+    if (user.role === "dispatcher" && view === "owner-recap") return true;
+    return false;
   }
 
   function viewTitle(view, role) {
