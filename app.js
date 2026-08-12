@@ -1037,6 +1037,174 @@ function renderNetradyneDashboard(user) {
     showToast("Row deleted.");
   }
 
+  // ---- Netradyne "View Event Summary" paste import ----
+  const NR_MONTHS = { jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06", jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12" };
+
+  // "Aug 11 2026" + "01:02:43 PM PDT" -> { dt:"2026-08-11T13:02", ymd:"2026-08-11" }
+  function netradynePasteDateTime(dateStr, timeStr) {
+    if (!dateStr) return { dt: "", ymd: "" };
+    const dm = dateStr.match(/^([A-Za-z]{3,})\s+(\d{1,2})\s+(\d{4})$/);
+    if (!dm) return { dt: "", ymd: "" };
+    const mo = NR_MONTHS[dm[1].slice(0, 3).toLowerCase()];
+    if (!mo) return { dt: "", ymd: "" };
+    const day = dm[2].padStart(2, "0");
+    const ymd = `${dm[3]}-${mo}-${day}`;
+    let hh = "00", mm = "00";
+    const tm = timeStr && timeStr.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);
+    if (tm) {
+      let h = Number(tm[1]); mm = tm[2];
+      const ap = (tm[3] || "").toUpperCase();
+      if (ap === "PM" && h < 12) h += 12;
+      if (ap === "AM" && h === 12) h = 0;
+      hh = String(h).padStart(2, "0");
+    }
+    return { dt: `${ymd}T${hh}:${mm}`, ymd };
+  }
+
+  // Parse pasted Netradyne "View Event Summary" text into recap rows (one per event).
+  function parseNetradynePaste(text) {
+    const lines = String(text).split(/\r?\n/).map((l) => l.replace(/^\s*\*\s*/, "").trim());
+    const isTime = (l) => /^\d{1,2}:\d{2}:\d{2}\s*(AM|PM)\b/i.test(l);
+    const isDate = (l) => /^[A-Za-z]{3,}\s+\d{1,2}\s+\d{4}$/.test(l);
+    const isVehicle = (l) => /^\d{6,7}$/.test(l);
+    const isVin = (l) => /^[A-HJ-NPR-Z0-9]{17}$/i.test(l);
+    const isSession = (l) => /^#\d+$/.test(l);
+    const isDuration = (l) => /^Alert Duration/i.test(l);
+
+    const events = [];
+    let cur = null;
+    for (const l of lines) {
+      if (!l) continue;
+      if (isTime(l)) { if (cur && cur.session) events.push(cur); cur = { time: l, text: [] }; continue; }
+      if (!cur) continue;
+      if (isDate(l)) cur.date = l;
+      else if (isSession(l)) { cur.session = l; events.push(cur); cur = null; }
+      else if (isVehicle(l)) cur.vehicle = l;
+      else if (isVin(l)) cur.vin = l;
+      else if (isDuration(l)) cur.duration = l;
+      else cur.text.push(l);
+    }
+    if (cur && cur.session) events.push(cur);
+
+    return events.map((ev) => {
+      const driverRaw = ev.text.length ? ev.text[ev.text.length - 1] : "";
+      const hit = findRosterDriver(driverRaw);
+      let observations = ev.text.slice(0, -1).join(" - ");
+      if (ev.duration) observations += `${observations ? " " : ""}(${ev.duration.replace(/^Alert Duration\s*:\s*/i, "")})`;
+      const { dt, ymd } = netradynePasteDateTime(ev.date, ev.time);
+      return {
+        alertCount: "1",
+        driverName: hit ? hit[0] : "",
+        driverNameRaw: driverRaw,
+        netradyneDriverId: hit ? hit[1] : "",
+        dateTime: dt,
+        ymd,
+        sessionId: ev.session || "",
+        vehicleNumber: ev.vehicle || "",
+        observations,
+        severity: "",
+        disputeNotes: hit ? "" : (driverRaw && /unknown/i.test(driverRaw) ? "" : (driverRaw ? `Driver (unmatched): ${driverRaw}` : "")),
+      };
+    });
+  }
+
+  function openNetradyneImport(user) {
+    const overlay = document.createElement("div");
+    overlay.className = "dispute-import-overlay";
+    overlay.innerHTML = `
+      <div class="dispute-import-modal">
+        <h3>Import Netradyne events</h3>
+        <p class="muted">Paste the <strong>View Event Summary</strong> list from Netradyne. One recap row is added per event, with driver, vehicle, date/time, session ID and the alert type filled in automatically.</p>
+        <textarea class="dispute-import-text" rows="12" placeholder="Paste the event list here…"></textarea>
+        <div class="dispute-import-actions">
+          <button class="btn btn-secondary" type="button" data-imp-cancel>Cancel</button>
+          <button class="btn btn-primary" type="button" data-imp-go>Import</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector("[data-imp-cancel]").addEventListener("click", close);
+    overlay.querySelector(".dispute-import-text").focus();
+    overlay.querySelector("[data-imp-go]").addEventListener("click", () => {
+      const text = overlay.querySelector(".dispute-import-text").value;
+      const parsed = parseNetradynePaste(text);
+      if (!parsed.length) { showToast("Nothing to import — no events found."); return; }
+      const clientId = netradyneRecapClientIdFor(user);
+      let firstYmd = "";
+      parsed.forEach((p, i) => {
+        if (!firstYmd && p.ymd) firstYmd = p.ymd;
+        netradyneRecaps.push({
+          id: `nr-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
+          clientId,
+          dailyDate: p.ymd || selectedNetradyneDate,
+          alertCount: p.alertCount,
+          driverName: p.driverName,
+          netradyneDriverId: p.netradyneDriverId,
+          dateTime: p.dateTime,
+          sessionId: p.sessionId,
+          vehicleNumber: p.vehicleNumber,
+          observations: p.observations,
+          severity: p.severity,
+          disputeNotes: p.disputeNotes,
+        });
+      });
+      // Persist all imported rows.
+      netradyneRecaps.slice(-parsed.length).forEach((r) => saveNetradyneRecapRow(r, true));
+      if (firstYmd) selectedNetradyneDate = firstYmd; // jump to the day of the imported events
+      addAudit(`${user.name} imported ${parsed.length} Netradyne event(s).`);
+      close();
+      render();
+      showToast(`Imported ${parsed.length} event(s).`);
+    });
+  }
+
+  // One-click: build recap rows from the live Netradyne feed the app already
+  // collects (netradyneAlerts). Dedupes by session/alert id so re-running only
+  // adds new events.
+  function fillNetradyneFromLive(user) {
+    if (!netradyneAlerts.length) { showToast("No live Netradyne alerts loaded yet — try again in a moment."); return; }
+    const existing = new Set(netradyneRecaps.map((r) => String(r.sessionId || "").replace(/\D/g, "")).filter(Boolean));
+    const clientId = netradyneRecapClientIdFor(user);
+    const p = (n) => String(n).padStart(2, "0");
+    let added = 0, firstYmd = "";
+    netradyneAlerts.forEach((a, i) => {
+      const id = String(a.externalAlertId || a.id || "").replace(/\D/g, "");
+      if (!id || existing.has(id)) return;
+      existing.add(id);
+      let dt = "", ymd = "";
+      const d = a.occurredAt ? new Date(a.occurredAt) : null;
+      if (d && !isNaN(d)) { ymd = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; dt = `${ymd}T${p(d.getHours())}:${p(d.getMinutes())}`; }
+      const hit = findRosterDriver(a.driverName || "");
+      let obs = a.eventType || "";
+      if (a.eventCategory && a.eventCategory !== a.eventType) obs += `${obs ? " - " : ""}${a.eventCategory}`;
+      if (a.durationSeconds) obs += `${obs ? " " : ""}(${Math.floor(a.durationSeconds / 60)}m ${a.durationSeconds % 60}s)`;
+      if (!firstYmd && ymd) firstYmd = ymd;
+      const row = {
+        id: `nr-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
+        clientId,
+        dailyDate: ymd || selectedNetradyneDate,
+        alertCount: "1",
+        driverName: hit ? hit[0] : "",
+        netradyneDriverId: hit ? hit[1] : "",
+        dateTime: dt,
+        sessionId: `#${id}`,
+        vehicleNumber: a.vehicleNumber || "",
+        observations: obs,
+        severity: (a.severity && a.severity !== "Positive") ? a.severity : "",
+        disputeNotes: (!hit && a.driverName && !/unknown/i.test(a.driverName)) ? `Driver (unmatched): ${a.driverName}` : "",
+      };
+      netradyneRecaps.push(row);
+      saveNetradyneRecapRow(row, true);
+      added++;
+    });
+    if (!added) { showToast("All live alerts are already logged."); return; }
+    if (firstYmd) selectedNetradyneDate = firstYmd;
+    addAudit(`${user.name} filled ${added} Netradyne row(s) from the live feed.`);
+    render();
+    showToast(`Added ${added} alert(s) from the live feed.`);
+  }
+
   const NETRADYNE_SEVERITIES = ["", "Severe", "Moderate", "Low"];
 
   function renderNetradyneDriverSelect(row, editable) {
@@ -1118,7 +1286,7 @@ function renderNetradyneDashboard(user) {
               <th>Driver Name</th>
               <th>Netradyne Driver ID</th>
               <th>Date and Time</th>
-              <th>Session ID</th>
+              <th>Alert ID</th>
               <th>Vehicle Number</th>
               <th>Observations</th>
               <th>Severity</th>
@@ -1160,7 +1328,7 @@ function renderNetradyneDashboard(user) {
                 ${field("Number of Alerts", row.alertCount)}
                 ${field("Netradyne Driver ID", row.netradyneDriverId)}
                 ${field("Date and Time", row.dateTime)}
-                ${field("Session ID", row.sessionId)}
+                ${field("Alert ID", row.alertId)}
                 ${field("Vehicle Number", row.vehicleNumber)}
                 ${field("Observations", row.observations)}
                 ${field("Severity", row.severity)}
@@ -1215,7 +1383,9 @@ function renderNetradyneDashboard(user) {
             <p>${rows.length} rows visible.</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
-            ${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="netradyne-recap-add-row">+ Add row</button>` : ""}
+            ${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="netradyne-recap-fill-live">⚡ Fill from live alerts${netradyneAlerts.length ? ` (${netradyneAlerts.length})` : ""}</button>` : ""}
+            ${editable ? `<button class="btn btn-secondary btn-small" type="button" data-action="netradyne-recap-import">Import (paste)</button>` : ""}
+            ${editable ? `<button class="btn btn-secondary btn-small" type="button" data-action="netradyne-recap-add-row">+ Add row</button>` : ""}
             <span class="pill ${editable ? "green" : "blue"}">${editable ? "Editable" : "Owner view"}</span>
           </div>
         </div>
@@ -1236,7 +1406,7 @@ function renderNetradyneDashboard(user) {
       ["Driver Name", (r) => r.driverName, "wrap col-driver"],
       ["Netradyne Driver ID", (r) => r.netradyneDriverId, "wrap col-vrids"],
       ["Date and Time", (r) => r.dateTime, ""],
-      ["Session ID", (r) => r.sessionId, ""],
+      ["Alert ID", (r) => r.alertId, ""],
       ["Vehicle", (r) => r.vehicleNumber, ""],
       ["Observations", (r) => r.observations, "wrap col-issues"],
       ["Severity", (r) => r.severity, ""],
@@ -1707,23 +1877,31 @@ function renderNetradyneDashboard(user) {
   // Match a pasted driver name to a roster option, tolerating middle names,
   // suffixes (JR/III), punctuation and apostrophes (e.g. "Willie LOUIS Irby JR"
   // -> "Willie Irby", "Jennifer Luavail Woods" -> "Jennifer Woods").
-  function matchDisputeDriver(raw) {
-    if (!raw) return "";
+  // Find the roster entry [name, id] for a pasted driver name, tolerating middle
+  // names, suffixes (JR/III), punctuation and apostrophes. Returns null if no match
+  // (e.g. "Unknown driver").
+  function findRosterDriver(raw) {
+    if (!raw) return null;
     const SUFFIX = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
     const clean = (s) => s.toLowerCase().replace(/\(.*?\)/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const toks = (s) => clean(s).split(" ").filter((w) => w && !SUFFIX.has(w));
     const rawN = clean(raw);
     const rawT = toks(raw);
-    if (!rawT.length) return raw;
+    if (!rawT.length || rawN === "unknown driver") return null;
     const first = rawT[0], last = rawT[rawT.length - 1];
     const rawSet = new Set(rawT);
-
     const find = (fn) => NETRADYNE_DRIVERS.find(([name]) => fn(toks(name)));
-    let hit =
+    return (
       NETRADYNE_DRIVERS.find(([name]) => clean(name) === rawN) ||                                   // 1. exact
       find((t) => t[0] === first && t[t.length - 1] === last) ||                                    // 2. same first + last
       find((t) => t[t.length - 1] === last && (t[0].startsWith(first) || first.startsWith(t[0]))) || // 3. last + first-prefix
-      find((t) => t.length && t.every((w) => rawSet.has(w)));                                        // 4. roster tokens ⊆ pasted
+      find((t) => t.length && t.every((w) => rawSet.has(w))) ||                                      // 4. roster tokens ⊆ pasted
+      null
+    );
+  }
+
+  function matchDisputeDriver(raw) {
+    const hit = findRosterDriver(raw);
     return hit ? hit[0] : raw;
   }
 
@@ -5244,6 +5422,7 @@ if (sortBtn && currentView === 'netradyne-dashboard') {
       if (currentView === "netradyne-recap") {
         selectedNetradyneDate = todayISO();
         loadNetradyneRecaps().then(render);
+        pollNetradyneAlerts(); // refresh the live feed so "Fill from live alerts" is current
       }
       if (currentView === "dispute-tracker") {
         selectedDisputeWeek = disputeWeekStartOf(todayISO());
@@ -5364,6 +5543,12 @@ case "hos-close-filters":
         break;
       case "recap-print":
         exportRecapPrintable(user);
+        break;
+      case "netradyne-recap-fill-live":
+        fillNetradyneFromLive(user);
+        break;
+      case "netradyne-recap-import":
+        openNetradyneImport(user);
         break;
       case "netradyne-recap-add-row":
         addNetradyneRecapRow(user);
