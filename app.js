@@ -2365,9 +2365,11 @@ function renderNetradyneDashboard(user) {
       });
     });
 
-    // Keep focus/caret in the search box (it's not inside a data-form).
-    const searchFocused = activeEl && activeEl.getAttribute && activeEl.getAttribute("data-search") !== null && activeEl.hasAttribute("data-search");
-    const searchSel = searchFocused ? [activeEl.selectionStart, activeEl.selectionEnd] : null;
+    // Keep focus/caret in whichever search box was active (they live outside a
+    // data-form, so a re-render would otherwise blur them after each keystroke).
+    const SEARCH_ATTRS = ["data-search", "data-nr-search", "data-dispute-search", "data-driver-search"];
+    const focusedSearchAttr = (activeEl && activeEl.getAttribute) ? (SEARCH_ATTRS.find((a) => activeEl.hasAttribute(a)) || null) : null;
+    const searchSel = focusedSearchAttr ? [activeEl.selectionStart, activeEl.selectionEnd] : null;
 
     if (!isAllowedView(user, currentView)) {
       currentView = defaultView(user);
@@ -2391,8 +2393,8 @@ function renderNetradyneDashboard(user) {
       const el = document.querySelector(`form[data-form="${form}"] [name="${name}"]`);
       if (el && el.value !== value) el.value = value;
     });
-    if (searchFocused) {
-      const el = document.querySelector("[data-search]");
+    if (focusedSearchAttr) {
+      const el = document.querySelector(`[${focusedSearchAttr}]`);
       if (el) { el.focus(); try { el.setSelectionRange(searchSel[0], searchSel[1]); } catch (_) {} }
     }
     if (focusInfo) {
