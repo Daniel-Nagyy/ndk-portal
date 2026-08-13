@@ -16,6 +16,7 @@ import {
   getRecaps, syncRecaps, getRecapById, deleteRecap, getDbOverview,
   getNetradyneRecaps, syncNetradyneRecaps, getNetradyneRecapById, deleteNetradyneRecap,
   getDisputes, syncDisputes, getDisputeById, deleteDispute,
+  listDrivers, getDriverById, upsertDriver, deleteDriver,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
@@ -864,6 +865,43 @@ const requestHandler = (req, res) => {  // CORS Headers
         }
         const changes = deleteDispute(body.id);
         sendJson(200, { success: true, deleted: changes });
+      } catch (e) {
+        sendJson(500, { success: false, error: simplifyError(e) });
+      }
+    })();
+    return;
+  }
+
+  // ---------- Drivers roster (with photos) — account-scoped ----------
+  if (url.pathname === '/api/drivers') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Unauthorized' });
+        const isAdmin = authUser.role === 'superadmin' || authUser.role === 'admin';
+        if (req.method === 'GET') {
+          const drivers = listDrivers(isAdmin ? null : authUser.account_id);
+          return sendJson(200, { success: true, drivers });
+        }
+        if (authUser.role === 'owner') return sendJson(403, { success: false, error: 'Owners cannot modify the roster' });
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req);
+          if (!body.id || !body.name) return sendJson(400, { success: false, error: 'id and name required' });
+          const accountId = isAdmin ? (body.accountId || authUser.account_id) : authUser.account_id;
+          if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+          const saved = upsertDriver({ id: body.id, accountId, name: body.name, netradyneId: body.netradyneId, photos: body.photos, photo: body.photo });
+          return sendJson(200, { success: true, driver: saved });
+        }
+        if (req.method === 'DELETE') {
+          const body = await readJsonBody(req);
+          if (!body.id) return sendJson(400, { success: false, error: 'id required' });
+          if (!isAdmin) {
+            const existing = getDriverById(body.id);
+            if (existing && existing.accountId !== authUser.account_id) return sendJson(403, { success: false, error: 'Forbidden' });
+          }
+          return sendJson(200, { success: true, deleted: deleteDriver(body.id) });
+        }
+        return sendJson(405, { success: false, error: 'Method not allowed' });
       } catch (e) {
         sendJson(500, { success: false, error: simplifyError(e) });
       }

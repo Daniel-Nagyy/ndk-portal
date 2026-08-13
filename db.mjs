@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS netradyne_recaps (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS drivers (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  netradyne_id TEXT,
+  photo TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS disputes (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL,
@@ -423,6 +433,49 @@ export function syncNetradyneRecaps(recapsArray) {
     }
   });
   tx(recapsArray);
+}
+
+// ---------- Drivers (roster with photos) ----------
+function rowToDriver(r) {
+  // The `photo` column holds a JSON array of data-URLs (legacy rows may hold a
+  // single bare string). Normalize to a `photos` array + a `photo` cover.
+  let photos = [];
+  if (r.photo) {
+    try {
+      const p = JSON.parse(r.photo);
+      if (Array.isArray(p)) photos = p.filter(Boolean);
+      else if (typeof p === "string" && p) photos = [p];
+    } catch (_) {
+      photos = [r.photo];
+    }
+  }
+  return { id: r.id, accountId: r.account_id, name: r.name || "", netradyneId: r.netradyne_id || "", photos, photo: photos[0] || "", updatedAt: r.updated_at };
+}
+export function listDrivers(accountId = null) {
+  const rows = accountId
+    ? db.prepare("SELECT * FROM drivers WHERE account_id = ? ORDER BY name COLLATE NOCASE").all(accountId)
+    : db.prepare("SELECT * FROM drivers ORDER BY name COLLATE NOCASE").all();
+  return rows.map(rowToDriver);
+}
+export function getDriverById(id) {
+  const r = db.prepare("SELECT * FROM drivers WHERE id = ?").get(id);
+  return r ? rowToDriver(r) : null;
+}
+export function upsertDriver(d) {
+  db.prepare(`
+    INSERT INTO drivers (id, account_id, name, netradyne_id, photo, updated_at)
+    VALUES (@id, @account_id, @name, @netradyne_id, @photo, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      account_id = excluded.account_id, name = excluded.name,
+      netradyne_id = excluded.netradyne_id, photo = excluded.photo, updated_at = datetime('now')
+  `).run({
+    id: d.id, account_id: d.accountId, name: d.name || "", netradyne_id: d.netradyneId || "",
+    photo: JSON.stringify(Array.isArray(d.photos) ? d.photos.filter(Boolean) : (d.photo ? [d.photo] : [])),
+  });
+  return getDriverById(d.id);
+}
+export function deleteDriver(id) {
+  return db.prepare("DELETE FROM drivers WHERE id = ?").run(id).changes;
 }
 
 // ---------- Disputes (Dispute Tracker: on-time & acceptance) ----------

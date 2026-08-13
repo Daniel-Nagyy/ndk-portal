@@ -20,6 +20,7 @@
     takeover: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
     'netradyne-recap': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
     'dispute-tracker': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>',
+    'drivers': '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><rect x="15" y="3" width="7" height="7" rx="1"/></svg>',
   };
 
   function getNavIcon(name) {
@@ -45,6 +46,9 @@
   let recapFilter = "all";
   let editingAccountId = null; // when set, the Accounts form edits this account instead of creating
   let downTrucks = []; // Truck Tracker rows — DB-backed only, never persisted to localStorage
+  let drivers = [];    // Driver roster (with photos) — DB-backed only
+  let driverSearch = "";
+  let pendingDriverPhotos = []; // resized data-URLs held between file pick and "Add driver"
   let truckStatusFilter = "all";
   let dataRefreshing = false;
   let netradyneAlerts = [];
@@ -621,7 +625,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     dataRefreshing = true;
     if (manual) render();
     try {
-      await Promise.all([loadRecaps(), loadDownTrucks(), loadNetradyneRecaps(), loadDisputes()]);
+      await Promise.all([loadRecaps(), loadDownTrucks(), loadNetradyneRecaps(), loadDisputes(), loadDrivers()]);
       if (["owner", "dispatcher"].includes(user.role)) await fetchGeotabDriversReadiness();
       await pollNetradyneAlerts();
     } catch (_) { /* ignore */ }
@@ -785,6 +789,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
         await loadRecaps();
         await loadNetradyneRecaps();
         await loadDisputes();
+        await loadDrivers();
         await loadDownTrucks();
         render();
         refreshPushSubscription();
@@ -1438,6 +1443,207 @@ function renderNetradyneDashboard(user) {
     printHtmlDocument(html);
   }
 
+  // ================= Drivers roster (with photos) =================
+  async function loadDrivers() {
+    try {
+      const res = await fetch("/api/drivers", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.drivers)) drivers = data.drivers;
+    } catch (e) {
+      console.warn("Failed to load drivers:", e);
+    }
+  }
+
+  function visibleDrivers() {
+    const term = driverSearch.trim().toLowerCase();
+    if (!term) return drivers;
+    return drivers.filter((d) => (d.name || "").toLowerCase().includes(term));
+  }
+
+  // Resize an image file to <=320px, return a compact JPEG data URL (Promise).
+  function resizePhoto(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const max = 320;
+          let { width, height } = img;
+          if (width > height && width > max) { height = Math.round(height * max / width); width = max; }
+          else if (height > max) { width = Math.round(width * max / height); height = max; }
+          const c = document.createElement("canvas");
+          c.width = width; c.height = height;
+          c.getContext("2d").drawImage(img, 0, 0, width, height);
+          resolve(c.toDataURL("image/jpeg", 0.82));
+        };
+        img.onerror = () => resolve("");
+        img.src = e.target.result;
+      };
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(file);
+    });
+  }
+  async function resizeFiles(fileList) {
+    const out = [];
+    for (const f of [...fileList]) { const d = await resizePhoto(f); if (d) out.push(d); }
+    return out;
+  }
+
+  async function addDriver(user) {
+    const nameEl = app.querySelector("[data-new-driver-name]");
+    const name = nameEl ? nameEl.value.trim() : "";
+    if (!name) { showToast("Enter a driver name."); return; }
+    const driver = {
+      id: `drv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      photos: pendingDriverPhotos.slice(),
+    };
+    try {
+      const res = await fetch("/api/drivers", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(driver),
+      });
+      const data = await res.json();
+      if (!data.success) { showToast(data.error || "Could not add driver."); return; }
+    } catch (_) { showToast("Could not reach the server."); return; }
+    pendingDriverPhotos = [];
+    addAudit(`${user.name} added driver ${name}.`);
+    await loadDrivers();
+    render();
+    showToast("Driver added.");
+  }
+
+  // Persist a driver's photo set (used when appending photos from the lightbox).
+  async function saveDriverPhotos(driver) {
+    try {
+      await fetch("/api/drivers", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: driver.id, name: driver.name, netradyneId: driver.netradyneId, photos: driver.photos }),
+      });
+    } catch (_) {}
+    await loadDrivers();
+  }
+
+  // Enlarged photo view. showAll=false → just the cover; showAll=true → every photo.
+  function openDriverLightbox(driver, showAll) {
+    const all = driver.photos || [];
+    const imgs = showAll ? all : (all.length ? [all[0]] : []);
+    const editable = getCurrentUser()?.role !== "owner";
+    if (!imgs.length && !editable) { showToast("No photo for this driver."); return; }
+    const overlay = document.createElement("div");
+    overlay.className = "driver-lightbox-overlay";
+    overlay.innerHTML = `
+      <div class="driver-lightbox">
+        <button class="driver-lightbox-close" type="button" data-lb-close aria-label="Close">×</button>
+        <h3>${escapeHtml(driver.name)}${showAll && all.length > 1 ? ` — ${all.length} photos` : ""}</h3>
+        <div class="driver-lightbox-grid ${imgs.length > 1 ? "multi" : "single"}">
+          ${imgs.length ? imgs.map((src) => `<img src="${escapeHtml(src)}" alt="${escapeHtml(driver.name)}" />`).join("") : `<p class="muted">No photos yet.</p>`}
+        </div>
+        ${editable && showAll ? `<label class="btn btn-secondary driver-lb-add">+ Add photos<input type="file" accept="image/*" multiple data-lb-add hidden></label>` : ""}
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector("[data-lb-close]").addEventListener("click", close);
+    const addInput = overlay.querySelector("[data-lb-add]");
+    if (addInput) addInput.addEventListener("change", async () => {
+      if (!addInput.files.length) return;
+      const arr = await resizeFiles(addInput.files);
+      if (!arr.length) return;
+      await saveDriverPhotos({ ...driver, photos: [...all, ...arr] });
+      close();
+      render();
+      showToast("Photo(s) added.");
+    });
+  }
+
+  function driverCover(d) {
+    const cover = (d.photos && d.photos[0]) || "";
+    if (cover) return `<img class="driver-photo" src="${escapeHtml(cover)}" alt="${escapeHtml(d.name)}" />`;
+    const initials = (d.name || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+    return `<div class="driver-photo driver-photo--placeholder">${escapeHtml(initials || "?")}</div>`;
+  }
+
+  async function deleteDriverRow(id) {
+    const d = drivers.find((x) => x.id === id);
+    if (!d) return;
+    if (!window.confirm(`Remove ${d.name || "this driver"} from the roster?`)) return;
+    try {
+      await fetch("/api/drivers", {
+        method: "DELETE", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    } catch (_) {}
+    drivers = drivers.filter((x) => x.id !== id);
+    addAudit(`${getCurrentUser().name} removed driver ${d.name || ""}.`);
+    render();
+    showToast("Driver removed.");
+  }
+
+
+  function renderDriversPage(user) {
+    const list = visibleDrivers();
+    return `
+      <div class="section-title">
+        <div>
+          <h2>Drivers</h2>
+          <p>Roster of drivers with photos for Netradyne tracking.</p>
+        </div>
+      </div>
+
+      <div class="panel driver-add-panel">
+        <div class="panel-header"><div><h3>Add a new driver</h3><p>Upload a photo so this driver can be identified in Netradyne.</p></div></div>
+        <div class="panel-body">
+          <div class="driver-add-form">
+            <div class="driver-add-photo">
+              <label class="driver-photo-upload">
+                ${pendingDriverPhotos.length ? `<img class="driver-photo" src="${escapeHtml(pendingDriverPhotos[0])}" alt="New driver photo" />${pendingDriverPhotos.length > 1 ? `<span class="driver-photo-count">${pendingDriverPhotos.length}</span>` : ""}` : `<span class="driver-photo-hint">📷<br>Upload photo(s)</span>`}
+                <input type="file" accept="image/*" multiple data-new-driver-photo hidden />
+              </label>
+              ${pendingDriverPhotos.length ? `<button class="driver-photo-clear" type="button" data-action="driver-photo-clear">Clear</button>` : ""}
+            </div>
+            <div class="driver-add-fields">
+              <label class="field compact-field">
+                <span class="field-label">Driver name</span>
+                <input class="table-control" type="text" data-new-driver-name placeholder="Full name" />
+              </label>
+              <button class="btn btn-primary" type="button" data-action="driver-add">+ Add driver</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="recap-toolbar">
+        <label class="field compact-field" style="flex:1;min-width:160px">
+          <span class="field-label">🔎 Search</span>
+          <input class="table-control" type="search" data-driver-search placeholder="Search by name…" value="${escapeHtml(driverSearch)}" />
+        </label>
+      </div>
+
+      ${list.length ? `
+        <div class="driver-grid">
+          ${list.map((d) => {
+            const count = (d.photos || []).length;
+            return `
+            <article class="driver-card">
+              <button class="driver-delete" type="button" data-action="driver-delete" data-driver-id="${d.id}" aria-label="Remove driver">×</button>
+              <button class="driver-photo-btn" type="button" data-action="driver-photo-view" data-driver-id="${d.id}" title="Tap to enlarge">
+                ${driverCover(d)}
+                ${count > 1 ? `<span class="driver-photo-count">${count}</span>` : ""}
+              </button>
+              <button class="driver-name-btn" type="button" data-action="driver-photos-all" data-driver-id="${d.id}" title="Tap to see all photos">
+                ${escapeHtml(d.name)}
+              </button>
+            </article>`;
+          }).join("")}
+        </div>
+      ` : `<div class="empty-state truck-empty"><div class="truck-empty-icon">🧑‍✈️</div><strong>No drivers yet</strong><p>Add your first driver above.</p></div>`}
+    `;
+  }
+
   // ================= Dispute Tracker (On Time + Acceptance) =================
   const DISPUTE_STATUSES = ["Disputed", "Accepted", "Rejected", "Reopened", "Needs escalation to MMPM"];
   // Acceptance "Rejected from start" categories and their penalty multipliers.
@@ -2085,7 +2291,7 @@ function renderNetradyneDashboard(user) {
   // when it would disrupt the user: while typing, or on data-entry/detail views where
   // a rebuild wipes what they're doing (e.g. daily recap). Data still updates in state
   // and the view refreshes when they navigate or interact.
-  const DATA_ENTRY_VIEWS = ["recap", "owner-recap", "dispatcher-recap", "netradyne-recap", "dispute-tracker", "users", "clients", "announcements", "settings"];
+  const DATA_ENTRY_VIEWS = ["recap", "owner-recap", "dispatcher-recap", "netradyne-recap", "dispute-tracker", "drivers", "users", "clients", "announcements", "settings"];
   function backgroundRender() {
     if (currentView === "login") return;
     const ae = document.activeElement;
@@ -2367,6 +2573,7 @@ function renderTopbar(user) {
       { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
       { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
       { id: "dispatcher-recap", label: "Daily Recap", icon: "recap" },
+      { id: "drivers", label: "Drivers", icon: "drivers" },
       { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       ...shared,
     ];
@@ -2390,6 +2597,7 @@ function renderTopbar(user) {
     if (currentView === 'netradyne-dashboard') return renderNetradyneDashboard(user);
     if (currentView === 'netradyne-recap') return renderNetradyneRecapPage(user);
     if (currentView === 'dispute-tracker') return renderDisputeTrackerPage(user);
+    if (currentView === 'drivers') return renderDriversPage(user);
     if (currentView === "recap" || currentView === "owner-recap" || currentView === "dispatcher-recap") {
       return renderRecapPage(user);
     }
@@ -5544,6 +5752,26 @@ case "hos-close-filters":
       case "recap-print":
         exportRecapPrintable(user);
         break;
+      case "driver-add":
+        await addDriver(user);
+        break;
+      case "driver-delete":
+        await deleteDriverRow(action.dataset.driverId);
+        break;
+      case "driver-photo-clear":
+        pendingDriverPhotos = [];
+        render();
+        break;
+      case "driver-photo-view": {
+        const d = drivers.find((x) => x.id === action.dataset.driverId);
+        if (d) openDriverLightbox(d, false);
+        break;
+      }
+      case "driver-photos-all": {
+        const d = drivers.find((x) => x.id === action.dataset.driverId);
+        if (d) openDriverLightbox(d, true);
+        break;
+      }
       case "netradyne-recap-fill-live":
         fillNetradyneFromLive(user);
         break;
@@ -5712,6 +5940,19 @@ case "hos-close-filters":
       return;
     }
 
+    const driverPhoto = event.target.closest("[data-new-driver-photo]");
+    if (driverPhoto) {
+      if (!driverPhoto.files || !driverPhoto.files.length) return;
+      resizeFiles(driverPhoto.files).then((arr) => {
+        if (!arr.length) return;
+        pendingDriverPhotos.push(...arr);
+        // Update the preview in place so the name/ID inputs keep their typed values.
+        const box = app.querySelector(".driver-photo-upload");
+        if (box) box.innerHTML = `<img class="driver-photo" src="${pendingDriverPhotos[0]}" alt="New driver photo" />${pendingDriverPhotos.length > 1 ? `<span class="driver-photo-count">${pendingDriverPhotos.length}</span>` : ""}<input type="file" accept="image/*" multiple data-new-driver-photo hidden />`;
+      });
+      return;
+    }
+
     const nrDriver = event.target.closest("[data-nr-driver]");
     if (nrDriver) {
       const row = netradyneRecaps.find((r) => r.id === nrDriver.dataset.nrId);
@@ -5865,6 +6106,14 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       return;
     }
 
+    const driverSearchInput = event.target.closest("[data-driver-search]");
+    if (driverSearchInput && currentView === "drivers") {
+      driverSearch = driverSearchInput.value;
+      window.clearTimeout(handleInput.searchTimer);
+      handleInput.searchTimer = window.setTimeout(render, 120);
+      return;
+    }
+
     const search = event.target.closest("[data-search]");
     if (!search) return;
     searchText = search.value;
@@ -5893,6 +6142,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       await loadRecaps();
       await loadNetradyneRecaps();
       await loadDisputes();
+      await loadDrivers();
       await loadDownTrucks();
       render();
       refreshPushSubscription();
