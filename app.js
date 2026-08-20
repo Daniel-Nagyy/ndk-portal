@@ -2652,11 +2652,11 @@ function renderTopbar(user) {
 
   function visibleHosDrivers(user) {
     let rows = state.hosDrivers || [];
-    if (user.role === "owner") {
-      rows = rows.filter((row) => row.clientId === user.clientId);
-    }
-    if (user.role === "dispatcher") {
-      rows = rows.filter((row) => row.assignedDispatcherId === user.id);
+    // HOS drivers come from the client-wide readiness scrape and carry no
+    // per-dispatcher assignment, so scope both owners and dispatchers by client
+    // (matching renderOwnerHosPage and the netradyne/dispute views).
+    if (user.role === "owner" || user.role === "dispatcher") {
+      rows = rows.filter((row) => !row.clientId || row.clientId === user.clientId);
     }
     return applySearch(rows, ["driverName", "vehicle", "status", "activeTripId"]);
   }
@@ -4269,13 +4269,17 @@ function renderRecapMobileCards(rows) {
   }
 
 function makeStartingMessage(row) {
+  const fuelValue = parseFloat(String(row.fuel).replace(/[^0-9.]/g, ""));
+  const lowFuelLine = Number.isFinite(fuelValue) && fuelValue < 60
+    ? `\n⏰ Heads up: the truck is at ${fuelValue}% fuel — please arrive at the yard a little early to fuel up before your trip.\n`
+    : "";
   return `👋 Hello ${row.driverAssigned || "—"},
 
 📍 Yard arrival time: ${row.requestedStart || "—"}
 🟢 Yard check-in (BT Clear): ${subtractMinutes(row.stopOneupcoming, 12) || "—"}
 🚛 Truck assigned: ${row.truck || "—"}
 ⛽️ Fuel %: ${row.fuel || "—"}
-
+${lowFuelLine}
 ⚠️ Please complete your pre-trip inspection and certify your logs before starting.
 
 📢 Please confirm receipt and notify us once you arrive at the yard. Thank you!`;
