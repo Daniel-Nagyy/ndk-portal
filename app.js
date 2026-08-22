@@ -70,25 +70,54 @@ let netradyneSortDir = 'desc';
   let disputeSearch = "";
 
   // The tracker is organized by WEEK (not day). Weeks run Saturday→Friday. Week 33 of
-  // 2026 starts Sat Aug 8 (Aug 8–14); week numbers are counted off that anchor.
-  const DISPUTE_WEEK_ANCHOR = "2026-08-08"; // Saturday = start of week 33
-  const DISPUTE_ANCHOR_WEEKNO = 33;
-  function parseIsoLocal(iso) { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); }
-  function ymdLocal(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
-  function isoAddDays(iso, n) { const d = parseIsoLocal(iso); d.setDate(d.getDate() + n); return ymdLocal(d); }
-  function disputeWeekStartOf(iso) { const d = parseIsoLocal(iso); const off = (d.getDay() - 6 + 7) % 7; d.setDate(d.getDate() - off); return ymdLocal(d); }
-  function disputeWeekNumber(weekStart) {
-    const diff = Math.round((parseIsoLocal(weekStart) - parseIsoLocal(DISPUTE_WEEK_ANCHOR)) / (7 * 86400000));
-    return DISPUTE_ANCHOR_WEEKNO + diff;
-  }
-  function disputeWeekLabel(weekStart) {
-    const fmt = (iso) => parseIsoLocal(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    return `${fmt(weekStart)} – ${fmt(isoAddDays(weekStart, 6))}`;
-  }
-  let selectedDisputeWeek = disputeWeekStartOf(todayISO());
-  let disputeTab = "ontime"; // "ontime" | "acceptance"
-  const disputeSaveTimers = {};
+const DISPUTE_WEEK_ANCHOR = "2026-08-09";
+const DISPUTE_ANCHOR_WEEKNO = 33;
 
+function parseIsoLocal(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function ymdLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function isoAddDays(iso, n) {
+  const d = parseIsoLocal(iso);
+  d.setDate(d.getDate() + n);
+  return ymdLocal(d);
+}
+
+function disputeWeekStartOf(iso) {
+  const d = parseIsoLocal(iso);
+  const off = d.getDay();
+  d.setDate(d.getDate() - off);
+  return ymdLocal(d);
+}
+
+function disputeWeekNumber(weekStart) {
+  const diff = Math.round(
+    (parseIsoLocal(weekStart) - parseIsoLocal(DISPUTE_WEEK_ANCHOR)) /
+      (7 * 86400000)
+  );
+
+  return DISPUTE_ANCHOR_WEEKNO + diff;
+}
+
+function disputeWeekLabel(weekStart) {
+  const start = parseIsoLocal(weekStart);
+  const end = parseIsoLocal(isoAddDays(weekStart, 6));
+
+  const month = start.toLocaleDateString("en-US", { month: "short" });
+  const startDay = String(start.getDate()).padStart(2, "0");
+  const endDay = String(end.getDate()).padStart(2, "0");
+
+  return `${month} ${startDay}-${endDay}`;
+}
+
+let selectedDisputeWeek = disputeWeekStartOf(todayISO());
+let disputeTab = "ontime";
+const disputeSaveTimers = {};
   // Driver roster for the Netradyne Recap dropdowns — filtered to drivers currently
   // working (per the active Driver Roster). Picking a name auto-fills the ID.
   const NETRADYNE_DRIVERS = [
