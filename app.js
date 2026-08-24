@@ -842,6 +842,46 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     return "NDK Dispatch";
   }
 
+  function isTripleJClient(clientId) {
+  const normalizedName = String(clientName(clientId) || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  return normalizedName.includes("triplej");
+}
+
+function recapStartOffsetMinutes(clientId) {
+  return isTripleJClient(clientId) ? 15 : 30;
+}
+
+function formatTripleJMessageDate(date) {
+  if (!date) return "—";
+
+  const [year, month, day] = String(date).split("-").map(Number);
+
+  if (!year || !month || !day) return date;
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(year, month - 1, day));
+}
+
+function formatTripleJMessageTime(time) {
+  const normalized = normalizeTime(time);
+  const match = normalized.match(/^(\d{2}):(\d{2})$/);
+
+  if (!match) return time || "—";
+
+  let hour = Number(match[1]);
+  const minute = match[2];
+  const suffix = hour >= 12 ? "PM" : "AM";
+
+  hour = hour % 12 || 12;
+
+  return `${hour}:${minute} ${suffix}`;
+}
   function clientNameFromState(sourceState, clientId) {
     const client = (sourceState.clients || []).find((item) => item.id === clientId);
     return client ? client.name : "NDK Dispatch";
@@ -4154,32 +4194,66 @@ function renderRecapMobileCards(rows) {
     </div>
   `;
 }
-  function renderRecapRow(row, index, editable) {
-    const missing = missingRequired(row);
-    const control = (field, widthClass) => renderTableControl(row, field, editable, widthClass);
-    return `
-      <tr>
-        <td class="row-number">${index}</td>
-        <td class="driver-cell">${control("driverAssigned")}</td>
-        <td>${control("tripDate")}</td>
-        <td class="id-cell">${control("tripId")}</td>
-        <td class="id-cell">${control("blockId")}</td>
-        <td class="vrids">${renderVrids(row, editable)}</td>
-        <td>${editable ? renderSelectControl(row, "solo", ["Solo 1", "Solo 5"]) : `<span class="pill blue">${escapeHtml(row.solo)}</span>`}</td>
-        <td class="${missing.includes("truck") ? "cell-required" : ""}">${control("truck")}</td>
-        <td class="${missing.includes("fuel") ? "cell-required" : ""}">${control("fuel")}</td>
-        <td class="${missing.includes("onDuty") ? "cell-required" : ""}">${control("onDuty")}</td>
-        <td>${control("requestedStart")}</td>
-        <td>${control("stopOneupcoming")}</td>
-        <td>${control("scheduledFinal")}</td>
-        <td class="start-msg-cell">${editable ? `<input class="toggle" type="checkbox" data-recap-field="startMessageSent" data-recap-id="${row.id}" ${row.startMessageSent ? "checked" : ""} />` : row.startMessageSent ? `<span class="pill green">Sent</span>` : `<span class="pill gray">No</span>`}</td>
-        <td>${editable ? `<input class="toggle" type="checkbox" data-recap-field="lateFirstStop" data-recap-id="${row.id}" ${row.lateFirstStop ? "checked" : ""} />` : row.lateFirstStop ? `<span class="pill red">Yes</span>` : `<span class="pill gray">No</span>`}</td>
-        <td class="recap-issues-cell ${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control issues-box" rows="4" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
-        <td>${editable ? `<button class="btn btn-primary btn-small" type="button" data-action="copy-starting-message" data-recap-id="${row.id}">Copy message</button>` : "—"}</td>
-        <td>${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="recap-delete-row" data-recap-id="${row.id}">Delete</button>` : ""}</td>
-      </tr>
+function renderRecapRow(row, index, editable) {
+  const missing = missingRequired(row);
+  const control = (field, widthClass) =>
+    renderTableControl(row, field, editable, widthClass);
+
+  const messageButtons = isTripleJClient(row.clientId)
+    ? `
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button
+          class="btn btn-secondary btn-small"
+          type="button"
+          data-action="copy-triplej-tour-reminder"
+          data-recap-id="${row.id}"
+        >
+          Tour Reminder
+        </button>
+        <button
+          class="btn btn-primary btn-small"
+          type="button"
+          data-action="copy-starting-message"
+          data-recap-id="${row.id}"
+        >
+          Starting Message
+        </button>
+      </div>
+    `
+    : `
+      <button
+        class="btn btn-primary btn-small"
+        type="button"
+        data-action="copy-starting-message"
+        data-recap-id="${row.id}"
+      >
+        Copy message
+      </button>
     `;
-  }
+
+  return `
+    <tr>
+      <td class="row-number">${index}</td>
+      <td class="driver-cell">${control("driverAssigned")}</td>
+      <td>${control("tripDate")}</td>
+      <td class="id-cell">${control("tripId")}</td>
+      <td class="id-cell">${control("blockId")}</td>
+      <td class="vrids">${renderVrids(row, editable)}</td>
+      <td>${editable ? renderSelectControl(row, "solo", ["Solo 1", "Solo 5"]) : `<span class="pill blue">${escapeHtml(row.solo)}</span>`}</td>
+      <td class="${missing.includes("truck") ? "cell-required" : ""}">${control("truck")}</td>
+      <td class="${missing.includes("fuel") ? "cell-required" : ""}">${control("fuel")}</td>
+      <td class="${missing.includes("onDuty") ? "cell-required" : ""}">${control("onDuty")}</td>
+      <td>${control("requestedStart")}</td>
+      <td>${control("stopOneupcoming")}</td>
+      <td>${control("scheduledFinal")}</td>
+      <td class="start-msg-cell">${editable ? `<input class="toggle" type="checkbox" data-recap-field="startMessageSent" data-recap-id="${row.id}" ${row.startMessageSent ? "checked" : ""} />` : row.startMessageSent ? `<span class="pill green">Sent</span>` : `<span class="pill gray">No</span>`}</td>
+      <td>${editable ? `<input class="toggle" type="checkbox" data-recap-field="lateFirstStop" data-recap-id="${row.id}" ${row.lateFirstStop ? "checked" : ""} />` : row.lateFirstStop ? `<span class="pill red">Yes</span>` : `<span class="pill gray">No</span>`}</td>
+      <td class="recap-issues-cell ${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control issues-box" rows="4" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
+      <td>${editable ? messageButtons : "—"}</td>
+      <td>${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="recap-delete-row" data-recap-id="${row.id}">Delete</button>` : ""}</td>
+    </tr>
+  `;
+}
 
   // VRIDs: show ALL of them. Editable = a textarea with one VRID per line (or
   // comma separated); read-only = chips. Never truncated with "+N".
@@ -4297,14 +4371,34 @@ function renderRecapMobileCards(rows) {
     `;
   }
 
+function makeTripleJTourReminderMessage(row) {
+  const date = formatTripleJMessageDate(row.dailyDate);
+  const time = formatTripleJMessageTime(row.stopOneupcoming);
+
+  return `Hello ${row.driverAssigned || "—"}, just a reminder that you are scheduled on ${date} at ${time}. Please confirm you received this message so we know you will be arriving as scheduled.
+
+A second message will be sent 3 hours before your start time with your assigned truck information and your confirmed start time.`;
+}
+
 function makeStartingMessage(row) {
-  const fuelValue = parseFloat(String(row.fuel).replace(/[^0-9.]/g, ""));
-  const lowFuelLine = Number.isFinite(fuelValue) && fuelValue < 60
-    ? `\n⏰ Heads up: the truck is at ${fuelValue}% fuel — please arrive at the yard a little early to fuel up before your trip.\n`
-    : "";
+  const fuelValue = parseFloat(
+    String(row.fuel).replace(/[^0-9.]/g, "")
+  );
+
+  const lowFuelLine =
+    Number.isFinite(fuelValue) && fuelValue < 60
+      ? `
+⏰ Heads up: the truck is at ${fuelValue}% fuel — please arrive at the yard a little early to fuel up before your trip.
+`
+      : "";
+
+  const yardArrivalTime = isTripleJClient(row.clientId)
+    ? subtractMinutes(row.stopOneupcoming, 15) || row.requestedStart || "—"
+    : row.requestedStart || "—";
+
   return `👋 Hello ${row.driverAssigned || "—"},
 
-📍 Yard arrival time: ${row.requestedStart || "—"}
+📍 Yard arrival time: ${yardArrivalTime}
 🟢 Yard check-in (BT Clear): ${subtractMinutes(row.stopOneupcoming, 12) || "—"}
 🚛 Truck assigned: ${row.truck || "—"}
 ⛽️ Fuel %: ${row.fuel || "—"}
@@ -5766,6 +5860,10 @@ case "hos-close-filters":
   hosFiltersOpen = false;
   render();
   break;
+      case "copy-triplej-tour-reminder":
+        copyTripleJTourReminder(action.dataset.recapId);
+        break;
+
       case "copy-starting-message":
         copyStartingMessage(action.dataset.recapId);
         break;
@@ -6042,14 +6140,22 @@ case "hos-close-filters":
       }
       row[field] = recapField.type === "checkbox" ? recapField.checked : recapField.value;
       // Requested Start is always 30 minutes before Stop 1 upcoming.
-      if (field === "stopOneupcoming") {
-        const computed = subtractMinutes(row.stopOneupcoming, 30);
-        if (computed) {
-          row.requestedStart = computed;
-          const rsInput = recapField.closest("tr, .recap-card-v2")?.querySelector('[data-recap-field="requestedStart"]');
-          if (rsInput) rsInput.value = computed; // update in place, no full re-render
-        }
-      }
+     if (field === "stopOneupcoming") {
+  const computed = subtractMinutes(
+    row.stopOneupcoming,
+    recapStartOffsetMinutes(row.clientId)
+  );
+
+  if (computed) {
+    row.requestedStart = computed;
+
+    const rsInput = recapField
+      .closest("tr, .recap-card-v2")
+      ?.querySelector('[data-recap-field="requestedStart"]');
+
+    if (rsInput) rsInput.value = computed;
+  }
+}
       addAudit(`${getCurrentUser().name} updated ${row.driverAssigned} ${field}.`);
       saveState();
       saveRecapRow(row); // per-row server save (debounced)
@@ -6338,63 +6444,104 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
     showToast("Announcement posted.");
   }
 
-  async function importTripsCsvFile(file, user) {
-    if (!user || user.role === "owner") {
-      throw new Error("Only admins and dispatchers can import trips.");
-    }
-    const clientId = user.role === "admin"
-      ? app.querySelector("[data-import-client]")?.value || state.clients[0]?.id
+async function importTripsCsvFile(file, user) {
+  if (!user || user.role === "owner") {
+    throw new Error("Only admins and dispatchers can import trips.");
+  }
+
+  const clientId =
+    user.role === "admin"
+      ? app.querySelector("[data-import-client]")?.value ||
+        state.clients[0]?.id
       : user.clientId;
-    if (!clientId) throw new Error("Choose a client before importing.");
 
-    const text = await readFileAsText(file);
-    const csvRows = parseCsv(text);
-    const importedRows = buildImportedRecapRows(csvRows, clientId, user, file.name);
-    if (!importedRows.length) throw new Error("No trip rows were found in this CSV.");
+  if (!clientId) {
+    throw new Error("Choose a client before importing.");
+  }
 
-    let created = 0;
-    let updated = 0;
-    importedRows.forEach((incoming) => {
-      const existing = state.recaps.find((row) =>
-        row.clientId === incoming.clientId &&
+  const tripleJ = isTripleJClient(clientId);
+
+  const text = await readFileAsText(file);
+  const csvRows = parseCsv(text);
+  const importedRows = buildImportedRecapRows(
+    csvRows,
+    clientId,
+    user,
+    file.name
+  );
+
+  if (!importedRows.length) {
+    throw new Error("No trip rows were found in this CSV.");
+  }
+
+  let created = 0;
+  let updated = 0;
+
+  importedRows.forEach((incoming) => {
+    const existing = state.recaps.find((row) => {
+      if (row.clientId !== incoming.clientId) {
+        return false;
+      }
+
+      if (
+        tripleJ &&
+        incoming.blockId &&
+        incoming.blockId !== "Pending Block"
+      ) {
+        return row.blockId === incoming.blockId;
+      }
+
+      return (
         row.dailyDate === incoming.dailyDate &&
         row.blockId === incoming.blockId &&
         row.tripId === incoming.tripId
       );
-      if (existing) {
-        const manualFields = {
-          id: existing.id,
-          shiftId: existing.shiftId,
-          assignedDispatcherId: existing.assignedDispatcherId || incoming.assignedDispatcherId,
-          dvir: existing.dvir,
-          fuel: existing.fuel,
-          onDuty: existing.onDuty,
-          finalArrivalHome: existing.finalArrivalHome,
-          driverLogOff: existing.driverLogOff,
-          startMessageSent: existing.startMessageSent,
-          lateFirstStop: existing.lateFirstStop,
-          issues: existing.issues,
-          bol: existing.bol,
-          blockDeepDive: existing.blockDeepDive,
-          startingMessage: existing.startingMessage,
-        };
-        Object.assign(existing, incoming, manualFields);
-        updated += 1;
-      } else {
-        state.recaps.push(incoming);
-        created += 1;
-      }
     });
 
-    refreshRecapDays(clientId, importedRows, file.name);
-    selectedRecapDate = getPrimaryImportedDate(importedRows);
-    recapFilter = "all";
-    addAudit(`${user.name} imported ${created} new and ${updated} updated recap rows from ${file.name}.`);
-    saveState();
-    syncRecapsNow(); // bulk import → one full sync (deliberate bulk action)
-    render();
-    showToast(`Imported ${created} new rows and updated ${updated} rows from ${file.name}.`);
-  }
+    if (existing) {
+      const manualFields = {
+        id: existing.id,
+        shiftId: existing.shiftId,
+        assignedDispatcherId:
+          existing.assignedDispatcherId ||
+          incoming.assignedDispatcherId,
+        dvir: existing.dvir,
+        fuel: existing.fuel,
+        onDuty: existing.onDuty,
+        finalArrivalHome: existing.finalArrivalHome,
+        driverLogOff: existing.driverLogOff,
+        startMessageSent: existing.startMessageSent,
+        lateFirstStop: existing.lateFirstStop,
+        issues: existing.issues,
+        bol: existing.bol,
+        blockDeepDive: existing.blockDeepDive,
+        startingMessage: existing.startingMessage,
+      };
+
+      Object.assign(existing, incoming, manualFields);
+      updated += 1;
+    } else {
+      state.recaps.push(incoming);
+      created += 1;
+    }
+  });
+
+  refreshRecapDays(clientId, importedRows, file.name);
+  selectedRecapDate = getPrimaryImportedDate(importedRows);
+  recapFilter = "all";
+
+  addAudit(
+    `${user.name} imported ${created} new and ${updated} updated recap rows from ${file.name}.`
+  );
+
+  saveState();
+  syncRecapsNow();
+  render();
+
+  showToast(
+    `Imported ${created} new rows and updated ${updated} rows from ${file.name}.`
+  );
+}
 
   function readFileAsText(file) {
     return new Promise((resolve, reject) => {
@@ -6452,67 +6599,287 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       });
   }
 
-  function buildImportedRecapRows(csvRows, clientId, user, fileName) {
-    const grouped = new Map();
-    csvRows.forEach((csvRow, index) => {
-      const blockId = csvValue(csvRow, "Block ID");
-      const tripId = csvValue(csvRow, "Trip ID");
-      const loadId = csvValue(csvRow, "Load ID");
-      if (!tripId) return;
-      const key = `${blockId || "NO-BLOCK"}::${tripId || loadId || index}`;
-      if (!grouped.has(key)) grouped.set(key, []);
+function buildImportedRecapRows(csvRows, clientId, user, fileName) {
+  const grouped = new Map();
+  const tripleJ = isTripleJClient(clientId);
+
+  csvRows.forEach((csvRow, index) => {
+    const blockId = csvValue(csvRow, "Block ID");
+    const tripId = csvValue(csvRow, "Trip ID");
+    const loadId = csvValue(csvRow, "Load ID");
+
+    if (tripleJ) {
+      if (!blockId && !tripId) return;
+
+      const key = blockId
+        ? `BLOCK::${blockId}`
+        : `TRIP::${tripId || loadId || index}`;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+
       grouped.get(key).push(csvRow);
-    });
+      return;
+    }
 
-    return [...grouped.values()].map((groupRows) => {
-      const first = groupRows[0];
-      const blockId = csvValue(first, "Block ID");
-      const tripId = csvValue(first, "Trip ID");
-      const stopOneTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 1 Planned Arrival Date", "Stop 1 Planned Arrival Time")).filter(Boolean);
-      const actualStopOneTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 1 Actual Arrival Date", "Stop 1 Actual Arrival Time")).filter(Boolean);
-      const finalupcomingTimes = groupRows.map((row) => dateTimeFromCsv(row, "Stop 2 Planned Arrival Date", "Stop 2 Planned Arrival Time")).filter(Boolean);
-      const earliestStopOne = earliestDateTime(stopOneTimes);
-      const earliestActual = earliestDateTime(actualStopOneTimes);
-      const latestFinal = latestDateTime(finalupcomingTimes);
-      const dailyDate = earliestStopOne?.date || selectedRecapDate || todayISO();
-      const loadIds = unique(groupRows.map((row) => csvValue(row, "Load ID")).filter(Boolean));
-      const truck = firstNonEmpty(groupRows, ["Tractor Vehicle ID"]);
+    if (!tripId) return;
 
-      return {
-        id: makeId("r"),
-        clientId,
-        dailyDate,
-        shiftId: null,
-        assignedDispatcherId: user.role === "dispatcher" ? user.id : null,
-        driverAssigned: firstNonEmpty(groupRows, ["Driver Name"]) || "Unassigned Driver",
-        tripDate: earliestStopOne ? `${earliestStopOne.date} ${earliestStopOne.time}` : `${dailyDate} 00:00`,
-        status: mapTripStatus(firstNonEmpty(groupRows, ["Trip Stage", "Load Execution Status"])),
-        tripId,
-        blockId: blockId || "Pending Block",
-        vrids: loadIds,
-        solo: detectSoloType(groupRows),
-        truck,
-        dvir: "Not Started",
-        fuel: "",
-        onDuty: "",
-        requestedStart: earliestStopOne ? subtractMinutes(earliestStopOne.time, 30) : "",
-        stopOneupcoming: earliestStopOne?.time || "",
-        actualCheckIn: earliestActual ? `${earliestActual.date} ${earliestActual.time}` : "",
-        scheduledFinal: latestFinal?.time || "",
-        finalArrivalHome: "",
-        driverLogOff: "",
-        startMessageSent: false,
-        lateFirstStop: false,
-        issues: "",
-        bol: "Pending",
-        blockDeepDive: "",
-        startingMessage: "",
-        importSource: fileName,
-        importedAt: new Date().toISOString(),
-        sourceLoadCount: groupRows.length,
-      };
-    });
-  }
+    const key = `${blockId || "NO-BLOCK"}::${tripId || loadId || index}`;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+
+    grouped.get(key).push(csvRow);
+  });
+
+  return [...grouped.values()].map((groupRows) => {
+    const first = groupRows[0];
+    const blockId = csvValue(first, "Block ID");
+    const tripId = csvValue(first, "Trip ID");
+
+    const stopOneTimes = groupRows
+      .map((row) =>
+        dateTimeFromCsv(
+          row,
+          "Stop 1 Planned Arrival Date",
+          "Stop 1 Planned Arrival Time"
+        )
+      )
+      .filter(Boolean);
+
+    const actualStopOneTimes = groupRows
+      .map((row) =>
+        dateTimeFromCsv(
+          row,
+          "Stop 1 Actual Arrival Date",
+          "Stop 1 Actual Arrival Time"
+        )
+      )
+      .filter(Boolean);
+
+    const finalupcomingTimes = groupRows
+      .map((row) =>
+        dateTimeFromCsv(
+          row,
+          "Stop 2 Planned Arrival Date",
+          "Stop 2 Planned Arrival Time"
+        )
+      )
+      .filter(Boolean);
+
+    const earliestStopOne = earliestDateTime(stopOneTimes);
+    const earliestActual = earliestDateTime(actualStopOneTimes);
+    const latestFinal = latestDateTime(finalupcomingTimes);
+
+    const dailyDate =
+      earliestStopOne?.date ||
+      selectedRecapDate ||
+      todayISO();
+
+    const loadIds = unique(
+      groupRows
+        .map((row) => csvValue(row, "Load ID"))
+        .filter(Boolean)
+    );
+
+    const truck = firstNonEmpty(groupRows, [
+      "Tractor Vehicle ID",
+    ]);
+
+    return {
+      id: makeId("r"),
+      clientId,
+      dailyDate,
+      shiftId: null,
+      assignedDispatcherId:
+        user.role === "dispatcher" ? user.id : null,
+      driverAssigned:
+        firstNonEmpty(groupRows, ["Driver Name"]) ||
+        "Unassigned Driver",
+      tripDate: earliestStopOne
+        ? `${earliestStopOne.date} ${earliestStopOne.time}`
+        : `${dailyDate} 00:00`,
+      status: mapTripStatus(
+        firstNonEmpty(groupRows, [
+          "Trip Stage",
+          "Load Execution Status",
+        ])
+      ),
+      tripId,
+      blockId: blockId || "Pending Block",
+      vrids: loadIds,
+      solo: detectSoloType(groupRows),
+      truck,
+      dvir: "Not Started",
+      fuel: "",
+      onDuty: "",
+      requestedStart: earliestStopOne
+        ? subtractMinutes(
+            earliestStopOne.time,
+            recapStartOffsetMinutes(clientId)
+          )
+        : "",
+      stopOneupcoming: earliestStopOne?.time || "",
+      actualCheckIn: earliestActual
+        ? `${earliestActual.date} ${earliestActual.time}`
+        : "",
+      scheduledFinal: latestFinal?.time || "",
+      finalArrivalHome: "",
+      driverLogOff: "",
+      startMessageSent: false,
+      lateFirstStop: false,
+      issues: "",
+      bol: "Pending",
+      blockDeepDive: "",
+      startingMessage: "",
+      importSource: fileName,
+      importedAt: new Date().toISOString(),
+      sourceLoadCount: groupRows.length,
+    };
+  });
+}function buildImportedRecapRows(csvRows, clientId, user, fileName) {
+  const grouped = new Map();
+  const tripleJ = isTripleJClient(clientId);
+
+  csvRows.forEach((csvRow, index) => {
+    const blockId = csvValue(csvRow, "Block ID");
+    const tripId = csvValue(csvRow, "Trip ID");
+    const loadId = csvValue(csvRow, "Load ID");
+
+    if (tripleJ) {
+      if (!blockId && !tripId) return;
+
+      const key = blockId
+        ? `BLOCK::${blockId}`
+        : `TRIP::${tripId || loadId || index}`;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+
+      grouped.get(key).push(csvRow);
+      return;
+    }
+
+    if (!tripId) return;
+
+    const key = `${blockId || "NO-BLOCK"}::${tripId || loadId || index}`;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+
+    grouped.get(key).push(csvRow);
+  });
+
+  return [...grouped.values()].map((groupRows) => {
+    const first = groupRows[0];
+    const blockId = csvValue(first, "Block ID");
+    const tripId = csvValue(first, "Trip ID");
+
+    const stopOneTimes = groupRows
+      .map((row) =>
+        dateTimeFromCsv(
+          row,
+          "Stop 1 Planned Arrival Date",
+          "Stop 1 Planned Arrival Time"
+        )
+      )
+      .filter(Boolean);
+
+    const actualStopOneTimes = groupRows
+      .map((row) =>
+        dateTimeFromCsv(
+          row,
+          "Stop 1 Actual Arrival Date",
+          "Stop 1 Actual Arrival Time"
+        )
+      )
+      .filter(Boolean);
+
+    const finalupcomingTimes = groupRows
+      .map((row) =>
+        dateTimeFromCsv(
+          row,
+          "Stop 2 Planned Arrival Date",
+          "Stop 2 Planned Arrival Time"
+        )
+      )
+      .filter(Boolean);
+
+    const earliestStopOne = earliestDateTime(stopOneTimes);
+    const earliestActual = earliestDateTime(actualStopOneTimes);
+    const latestFinal = latestDateTime(finalupcomingTimes);
+
+    const dailyDate =
+      earliestStopOne?.date ||
+      selectedRecapDate ||
+      todayISO();
+
+    const loadIds = unique(
+      groupRows
+        .map((row) => csvValue(row, "Load ID"))
+        .filter(Boolean)
+    );
+
+    const truck = firstNonEmpty(groupRows, [
+      "Tractor Vehicle ID",
+    ]);
+
+    return {
+      id: makeId("r"),
+      clientId,
+      dailyDate,
+      shiftId: null,
+      assignedDispatcherId:
+        user.role === "dispatcher" ? user.id : null,
+      driverAssigned:
+        firstNonEmpty(groupRows, ["Driver Name"]) ||
+        "Unassigned Driver",
+      tripDate: earliestStopOne
+        ? `${earliestStopOne.date} ${earliestStopOne.time}`
+        : `${dailyDate} 00:00`,
+      status: mapTripStatus(
+        firstNonEmpty(groupRows, [
+          "Trip Stage",
+          "Load Execution Status",
+        ])
+      ),
+      tripId,
+      blockId: blockId || "Pending Block",
+      vrids: loadIds,
+      solo: detectSoloType(groupRows),
+      truck,
+      dvir: "Not Started",
+      fuel: "",
+      onDuty: "",
+      requestedStart: earliestStopOne
+        ? subtractMinutes(
+            earliestStopOne.time,
+            recapStartOffsetMinutes(clientId)
+          )
+        : "",
+      stopOneupcoming: earliestStopOne?.time || "",
+      actualCheckIn: earliestActual
+        ? `${earliestActual.date} ${earliestActual.time}`
+        : "",
+      scheduledFinal: latestFinal?.time || "",
+      finalArrivalHome: "",
+      driverLogOff: "",
+      startMessageSent: false,
+      lateFirstStop: false,
+      issues: "",
+      bol: "Pending",
+      blockDeepDive: "",
+      startingMessage: "",
+      importSource: fileName,
+      importedAt: new Date().toISOString(),
+      sourceLoadCount: groupRows.length,
+    };
+  });
+}
 
   function csvValue(row, headerName) {
     const target = normalizeCsvHeader(headerName);
@@ -6682,22 +7049,45 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
     showToast(`${count} clean rows marked completed.`);
   }
 
-  function copyStartingMessage(recapId) {
-    const row = state.recaps.find((item) => item.id === recapId);
-    if (!row) return;
-    const message = makeStartingMessage(row);
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(message).then(() => showToast("Starting message copied."));
-      return;
-    }
-    const input = document.createElement("textarea");
-    input.value = message;
-    document.body.appendChild(input);
-    input.select();
-    document.execCommand("copy");
-    input.remove();
-    showToast("Starting message copied.");
+function copyRecapMessageText(message, successMessage) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard
+      .writeText(message)
+      .then(() => showToast(successMessage));
+    return;
   }
+
+  const input = document.createElement("textarea");
+  input.value = message;
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand("copy");
+  input.remove();
+
+  showToast(successMessage);
+}
+
+function copyStartingMessage(recapId) {
+  const row = state.recaps.find((item) => item.id === recapId);
+
+  if (!row) return;
+
+  copyRecapMessageText(
+    makeStartingMessage(row),
+    "Starting message copied."
+  );
+}
+
+function copyTripleJTourReminder(recapId) {
+  const row = state.recaps.find((item) => item.id === recapId);
+
+  if (!row) return;
+
+  copyRecapMessageText(
+    makeTripleJTourReminderMessage(row),
+    "Tour reminder copied."
+  );
+}
 
   function addAudit(text) {
     state.audit.unshift(text);
