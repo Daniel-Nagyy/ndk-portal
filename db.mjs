@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS down_trucks (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Failed provider logins (Geotab/Netradyne). Persisted so a wrong password stays
+-- blocked across restarts instead of resetting the counter and locking the account.
+CREATE TABLE IF NOT EXISTS auth_failures (
+  id TEXT PRIMARY KEY,          -- "<provider>:<key>"
+  provider TEXT NOT NULL,       -- 'geotab' | 'netradyne'
+  ref TEXT NOT NULL,            -- account id, or geotab server|database|user
+  fingerprint TEXT NOT NULL,    -- hash of the credentials that failed
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  first_failed_at TEXT DEFAULT (datetime('now')),
+  last_failed_at TEXT DEFAULT (datetime('now'))
+);
 `);
 
 // --- lightweight migrations: add columns to existing DBs if missing ---
@@ -129,6 +142,44 @@ const slugify = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/
 // Backfill an API key for any account missing one (extension authentication).
 for (const a of db.prepare("SELECT id FROM accounts WHERE api_key IS NULL OR api_key = ''").all()) {
   db.prepare("UPDATE accounts SET api_key = ? WHERE id = ?").run(genApiKey(), a.id);
+}
+
+// ---------- Provider auth failures (credential circuit breaker) ----------
+// Two rejected logins with the same credentials and we stop trying. The state
+// lives in the DB so a restart/redeploy does not reset the counter — that reset
+// is what let a stale password get replayed until the provider locked us out.
+export const AUTH_FAIL_LIMIT = Number(process.env.AUTH_FAIL_LIMIT || 2);
+
+export function getAuthFailure(provider, ref) {
+  return db.prepare("SELECT * FROM auth_failures WHERE id = ?").get(`${provider}:${ref}`) || null;
+}
+
+// Returns the updated row. A different fingerprint (credentials were changed)
+// starts the count over at 1.
+export function recordAuthFailure(provider, ref, fingerprint, message) {
+  const id = `${provider}:${ref}`;
+  const prev = getAuthFailure(provider, ref);
+  const count = prev && prev.fingerprint === fingerprint ? prev.fail_count + 1 : 1;
+  db.prepare(`INSERT INTO auth_failures (id, provider, ref, fingerprint, fail_count, last_error, last_failed_at)
+    VALUES (?,?,?,?,?,?,datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint, fail_count=excluded.fail_count,
+      last_error=excluded.last_error, last_failed_at=datetime('now')`)
+    .run(id, provider, ref, fingerprint, count, String(message || "").slice(0, 500));
+  return getAuthFailure(provider, ref);
+}
+
+// True once the limit is reached for these exact credentials.
+export function isAuthBlocked(provider, ref, fingerprint) {
+  const row = getAuthFailure(provider, ref);
+  return Boolean(row && row.fingerprint === fingerprint && row.fail_count >= AUTH_FAIL_LIMIT);
+}
+
+export function clearAuthFailure(provider, ref) {
+  db.prepare("DELETE FROM auth_failures WHERE id = ?").run(`${provider}:${ref}`);
+}
+
+export function listAuthFailures() {
+  return db.prepare("SELECT * FROM auth_failures ORDER BY provider, ref").all();
 }
 
 export function getAccountByApiKey(key) {

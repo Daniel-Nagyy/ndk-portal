@@ -8,7 +8,8 @@ import { addAlerts } from './store.js';
 import { notifyAlerts } from './notifier.js';
 import { log } from './logger.js';
 import { NETRADYNE } from './config.js';
-import { listAccounts, getAccountCredentials } from '../db.mjs';
+import { listAccounts, getAccountCredentials, recordAuthFailure, isAuthBlocked, clearAuthFailure, getAuthFailure, listAuthFailures, AUTH_FAIL_LIMIT } from '../db.mjs';
+import crypto from 'node:crypto';
 
 const running = new Set(); // accountIds currently mid-poll
 const status = new Map(); // accountId -> diagnostic status (for /api/netradyne/status)
@@ -23,13 +24,56 @@ export function getNetradyneStatus() {
 // doesn't re-blast every alert from earlier today. Dedup still prevents repeats.
 const FRESH_MS = Number(process.env.NETRADYNE_ALERT_FRESH_MS) || 20 * 60 * 1000;
 
+// ---------- Credential circuit breaker ----------
+// Netradyne locks accounts after repeated bad logins, so a rejected password must
+// not be replayed every poll. Once login is refused we stop trying until the
+// stored credentials change (the fingerprint covers the password, so saving a new
+// one clears the block automatically).
+function credFingerprint(account) {
+  return crypto
+    .createHash('sha256')
+    .update(`${account.netradyneEmail}|${account.netradynePassword}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+// A rejected login, as opposed to a timeout/network/scrape failure worth retrying.
+function isCredentialError(message) {
+  return /login not accepted|invalid|incorrect|wrong|locked|expired|not found|authentication failed/i.test(String(message || ''));
+}
+
+export function getNetradyneAuthBlocks() {
+  return listAuthFailures()
+    .filter((r) => r.provider === 'netradyne')
+    .map((r) => ({ accountId: r.ref, failCount: r.fail_count, blocked: r.fail_count >= AUTH_FAIL_LIMIT, lastError: r.last_error, lastFailedAt: r.last_failed_at }));
+}
+
+// Manual override, e.g. after unlocking the account on Netradyne's side.
+export function clearNetradyneAuthBlock(accountId) {
+  if (!accountId) throw new Error('clearNetradyneAuthBlock: pass an accountId');
+  clearAuthFailure('netradyne', accountId);
+}
+
 async function pollAccount(account) {
   if (running.has(account.id)) return;
-  running.add(account.id);
   const s = status.get(account.id) || {};
+
+  const fingerprint = credFingerprint(account);
+  if (isAuthBlocked('netradyne', account.id, fingerprint)) {
+    const row = getAuthFailure('netradyne', account.id);
+    s.loginOk = false;
+    s.authBlocked = true;
+    s.lastError = `login blocked after ${row.fail_count} rejected attempt(s); not retrying until the password is updated: ${row.last_error}`;
+    status.set(account.id, s);
+    return;
+  }
+
+  running.add(account.id);
   try {
     const ctx = await getAuthenticatedContext(account);
     s.loginOk = true;
+    s.authBlocked = false;
+    clearAuthFailure('netradyne', account.id);
     const raw = await scrapeAlerts(ctx);
     s.lastScrapedCount = raw.length;
     const added = addAlerts(account.id, raw);
@@ -44,7 +88,13 @@ async function pollAccount(account) {
   } catch (err) {
     s.loginOk = false;
     s.lastError = err.message;
-    log.error(`[${account.id}] poll failed: ${err.message}`);
+    if (isCredentialError(err.message)) {
+      const row = recordAuthFailure('netradyne', account.id, fingerprint, err.message);
+      s.authBlocked = row.fail_count >= AUTH_FAIL_LIMIT;
+      log.error(`[${account.id}] Netradyne login rejected (${row.fail_count}/${AUTH_FAIL_LIMIT})${s.authBlocked ? ' — polling paused until the stored password is updated' : ''}: ${err.message}`);
+    } else {
+      log.error(`[${account.id}] poll failed: ${err.message}`);
+    }
   } finally {
     s.lastPollAt = new Date().toISOString();
     status.set(account.id, s);

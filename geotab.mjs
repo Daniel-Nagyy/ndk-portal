@@ -2,6 +2,9 @@
 // Extracted from server.mjs so both the API endpoint and the background
 // alert engine can compute readiness from a set of account credentials.
 
+import crypto from "node:crypto";
+import { recordAuthFailure, isAuthBlocked, clearAuthFailure, getAuthFailure, listAuthFailures, AUTH_FAIL_LIMIT } from "./db.mjs";
+
 const DEFAULT_SERVER = "my.geotab.com";
 const AUTH_CACHE_MS = 30 * 60 * 1000;
 
@@ -51,6 +54,9 @@ async function withRetry(fn, options = {}) {
     } catch (error) {
       lastError = error;
       if (attempt >= retries) break;
+      // Never burn a second attempt on a bad password — repeated failures are
+      // what locks the Geotab account out.
+      if (options.shouldRetry && !options.shouldRetry(error)) break;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -63,6 +69,39 @@ async function geotabCallWithRetry(method, params, options = {}) {
 
 const authCache = new Map();
 
+// ---------- Credential circuit breaker ----------
+// A wrong password must NOT be retried on a schedule: Geotab locks the account
+// after repeated failed logins. Once a login is rejected for credential reasons
+// we refuse to try again until the credentials actually change (the fingerprint
+// covers the password, so saving a new one clears the block automatically).
+function credFingerprint(credentials) {
+  const server = credentials.server || DEFAULT_SERVER;
+  return crypto
+    .createHash("sha256")
+    .update(`${server}|${credentials.database}|${credentials.userName}|${credentials.password}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+// Geotab reports bad logins and lockouts as API errors, not HTTP failures.
+export function isCredentialError(error) {
+  const msg = String((error && error.message) || error || "");
+  return /InvalidUserException|UserLockedException|incorrect .*(login|credential)|invalid .*(login|credential|user)|authentication failed|too many .*(failed|attempts)|locked|password .*expired/i.test(msg);
+}
+
+// Which credentials are currently blocked, for diagnostics / the admin UI.
+export function getGeotabAuthBlocks() {
+  return listAuthFailures()
+    .filter((r) => r.provider === "geotab")
+    .map((r) => ({ ref: r.ref, failCount: r.fail_count, blocked: r.fail_count >= AUTH_FAIL_LIMIT, lastError: r.last_error, lastFailedAt: r.last_failed_at }));
+}
+
+// Manual override, e.g. after unlocking the account on Geotab's side.
+export function clearGeotabAuthBlock(cacheKey) {
+  if (!cacheKey) throw new Error("clearGeotabAuthBlock: pass the credential key (server|database|username)");
+  clearAuthFailure("geotab", cacheKey);
+}
+
 async function authenticate(credentials, options = {}) {
   if (!credentials || !credentials.database || !credentials.userName || !credentials.password) {
     throw new Error("Missing Geotab credentials");
@@ -73,11 +112,36 @@ async function authenticate(credentials, options = {}) {
   if (!options.force && cached && Date.now() - cached.createdAt < AUTH_CACHE_MS) {
     return cached.auth;
   }
-  const auth = await geotabCallWithRetry("Authenticate", {
-    database: credentials.database,
-    userName: credentials.userName,
-    password: credentials.password
-  }, { retries: 1, delayMs: 400, server });
+
+  const fingerprint = credFingerprint(credentials);
+  if (isAuthBlocked("geotab", cacheKey, fingerprint)) {
+    const row = getAuthFailure("geotab", cacheKey);
+    throw new Error(
+      `Geotab login blocked for ${credentials.userName}: the stored password was rejected ${row.fail_count}x and will not be retried until it is updated. Last error: ${row.last_error}`
+    );
+  }
+
+  let auth;
+  try {
+    auth = await geotabCallWithRetry("Authenticate", {
+      database: credentials.database,
+      userName: credentials.userName,
+      password: credentials.password
+    }, { retries: 1, delayMs: 400, server, shouldRetry: (e) => !isCredentialError(e) });
+  } catch (error) {
+    if (isCredentialError(error)) {
+      const row = recordAuthFailure("geotab", cacheKey, fingerprint, simplifyError(error));
+      authCache.delete(cacheKey);
+      if (row.fail_count >= AUTH_FAIL_LIMIT) {
+        throw new Error(
+          `Geotab login rejected ${row.fail_count}x for ${credentials.userName} — further attempts stopped to avoid an account lockout. Update the password to resume. Last error: ${simplifyError(error)}`
+        );
+      }
+    }
+    throw error;
+  }
+
+  clearAuthFailure("geotab", cacheKey);
   authCache.set(cacheKey, { auth, createdAt: Date.now() });
   return auth;
 }

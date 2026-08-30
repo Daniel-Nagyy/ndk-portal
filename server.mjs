@@ -1056,6 +1056,7 @@ const requestHandler = (req, res) => {  // CORS Headers
         pollMs: c ? c.netradyne.pollMs : null,
         lastPollAt: s.lastPollAt || null,
         loginOk: s.loginOk ?? null,
+        authBlocked: Boolean(s.authBlocked),  // password rejected; polling paused until it's updated
         lastScrapedCount: s.lastScrapedCount ?? null,   // alerts pulled from Netradyne
         lastNotifiedCount: s.lastNotifiedCount ?? null,  // fresh alerts that fired notifications
         lastError: s.lastError || null,
