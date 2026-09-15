@@ -38,8 +38,14 @@ function credFingerprint(account) {
 }
 
 // A rejected login, as opposed to a timeout/network/scrape failure worth retrying.
+//
+// Only the login step itself can produce one (see pollAccount), and only with
+// the message auth.js throws when the password was refused. This used to be a
+// loose word match — "invalid", "expired", "not found" — applied to every error
+// the poll raised, so two ordinary browser or scrape failures in a row counted
+// as two rejected passwords and paused that account's alerts permanently.
 function isCredentialError(message) {
-  return /login not accepted|invalid|incorrect|wrong|locked|expired|not found|authentication failed/i.test(String(message || ''));
+  return /^login not accepted|authentication failed|account (is )?locked/i.test(String(message || ''));
 }
 
 export function getNetradyneAuthBlocks() {
@@ -70,7 +76,13 @@ async function pollAccount(account) {
 
   running.add(account.id);
   try {
-    const ctx = await getAuthenticatedContext(account);
+    let ctx;
+    try {
+      ctx = await getAuthenticatedContext(account);
+    } catch (err) {
+      err.duringLogin = true;
+      throw err;
+    }
     s.loginOk = true;
     s.authBlocked = false;
     clearAuthFailure('netradyne', account.id);
@@ -86,9 +98,9 @@ async function pollAccount(account) {
       await notifyAlerts(account, fresh);
     }
   } catch (err) {
-    s.loginOk = false;
+    s.loginOk = !err.duringLogin && s.loginOk;
     s.lastError = err.message;
-    if (isCredentialError(err.message)) {
+    if (err.duringLogin && isCredentialError(err.message)) {
       const row = recordAuthFailure('netradyne', account.id, fingerprint, err.message);
       s.authBlocked = row.fail_count >= AUTH_FAIL_LIMIT;
       log.error(`[${account.id}] Netradyne login rejected (${row.fail_count}/${AUTH_FAIL_LIMIT})${s.authBlocked ? ' — polling paused until the stored password is updated' : ''}: ${err.message}`);
