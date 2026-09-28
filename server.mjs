@@ -444,6 +444,8 @@ const requestHandler = (req, res) => {  // CORS Headers
         if (!accountId) return sendJson(400, { success: false, error: 'No account. Pass ?apiKey=<key> or ?accountId=<id> (superadmin).' });
         const type = (url.searchParams.get('type') || 'hos').toLowerCase();
         const critical = url.searchParams.get('critical') !== '0';
+        // ?focus=1 also copies a Netradyne test to the account's focus group.
+        const focus = url.searchParams.get('focus') === '1';
         const nowEt = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
         let payload;
@@ -453,6 +455,7 @@ const requestHandler = (req, res) => {  // CORS Headers
             body: `Test Driver — Vehicle 000000 · ${nowEt}`,
             tag: 'test-netradyne',
             critical,
+            telegramFocus: focus,
             telegramText: `${critical ? '🚨' : '⚠️'} Netradyne TEST (${critical ? 'Severe' : 'Moderate'})\nEvent: Driver Drowsiness\nDriver: Test Driver\nVehicle: 000000\nTime: ${nowEt}`,
           };
         } else {
@@ -461,6 +464,7 @@ const requestHandler = (req, res) => {  // CORS Headers
             body: critical ? 'Break runs out in 8 min (0:08 left). Act now.' : 'Break: 0:45 left (~45 min).',
             tag: 'test-hos',
             critical,
+            telegramFocus: focus,
             telegramText: `${critical ? '🚨 HOS CRITICAL' : '⏰ HOS Warning'} TEST\nDriver: Test Driver\nBreak: ${critical ? '8' : '45'} min left`,
           };
         }
@@ -491,6 +495,7 @@ const requestHandler = (req, res) => {  // CORS Headers
         id: a.id,
         pushSubscribers: getSubscriptionsForAccount(a.id).length,
         hasTelegram: Boolean(a.telegram_chat_id),
+        hasTelegramFocus: Boolean(a.telegram_focus_chat_id),
         hasNetradyne: Boolean(a.netradyne_email),
         hasGeotab: Boolean(a.geotab_username),
       })),

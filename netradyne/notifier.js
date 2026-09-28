@@ -1,5 +1,6 @@
 // netradyne/notifier.js — route scraped alerts to an account's users.
 import { notifyAccount } from '../notify.mjs';
+import { isFocusAlert } from './topics.js';
 import { log } from './logger.js';
 
 // account = { id, name }; alerts = newly-added alert objects
@@ -29,6 +30,10 @@ export async function notifyAlerts(account, alerts) {
       `Account: ${account.name}`,
     ].join('\n');
 
+    // Roadside parking / distraction / drowsiness are also copied to the
+    // account's focus group, if it has one.
+    const focus = isFocusAlert(alert);
+
     try {
       await notifyAccount(account.id, {
         title, body,
@@ -36,8 +41,9 @@ export async function notifyAlerts(account, alerts) {
         critical: true, // all (non-positive) Netradyne alerts are high-urgency
         url: '/index.html',
         telegramText,
+        telegramFocus: focus,
       });
-      log.info(`[${account.id}] routed Netradyne alert ${alert.externalAlertId}`);
+      log.info(`[${account.id}] routed Netradyne alert ${alert.externalAlertId}${focus ? ' (+focus group)' : ''}`);
     } catch (e) {
       log.error(`[${account.id}] notify failed: ${e.message}`);
     }

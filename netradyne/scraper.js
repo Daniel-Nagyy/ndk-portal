@@ -94,6 +94,7 @@ export async function scrapeAlerts(context) {
         driverId: a.driver_id != null ? String(a.driver_id) : '',
         vehicleNumber: veh.nickname || veh.registration_number || a.vehicle_number || '',
         eventType: humanizeType(meta.type, a.event_description),   // e.g. "Driver Drowsiness"
+        eventTypeRaw: meta.type || '',                              // e.g. "DRIVER-DROWSINESS" (used for routing)
         eventCategory: a.event_description || meta.desc || '',      // e.g. "Drowsy"
         occurredAt: a.time_stamp ? new Date(a.time_stamp).toISOString() : '',
         durationSeconds: a.alert_duration || 0,

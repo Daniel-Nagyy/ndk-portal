@@ -129,6 +129,9 @@ function addColumnIfMissing(table, column, def) {
 }
 addColumnIfMissing("accounts", "telegram_bot_token_enc", "TEXT");
 addColumnIfMissing("accounts", "telegram_chat_id", "TEXT");
+// Optional second group per account: only the high-focus Netradyne event types
+// (roadside parking, distraction, drowsiness). The main chat still gets everything.
+addColumnIfMissing("accounts", "telegram_focus_chat_id", "TEXT");
 addColumnIfMissing("accounts", "api_key", "TEXT");
 // Truck Tracker asset fields (fleet roster: type, ownership, make, body, fuel, etc.)
 for (const col of ["vehicle_type", "ownership", "make", "body", "fuel", "owner", "license", "vin"]) {
@@ -199,10 +202,10 @@ export function createAccount(input) {
   db.prepare(`INSERT INTO accounts
     (id, name, geotab_server, geotab_database, geotab_username, geotab_password_enc,
      netradyne_email, netradyne_password_enc, netradyne_poll_ms,
-     telegram_bot_token_enc, telegram_chat_id, api_key)
+     telegram_bot_token_enc, telegram_chat_id, telegram_focus_chat_id, api_key)
     VALUES (@id,@name,@geotab_server,@geotab_database,@geotab_username,@geotab_password_enc,
      @netradyne_email,@netradyne_password_enc,@netradyne_poll_ms,
-     @telegram_bot_token_enc,@telegram_chat_id,@api_key)`).run({
+     @telegram_bot_token_enc,@telegram_chat_id,@telegram_focus_chat_id,@api_key)`).run({
     id,
     api_key: genApiKey(),
     name: input.name,
@@ -215,6 +218,7 @@ export function createAccount(input) {
     netradyne_poll_ms: Number(input.netradynePollMs) || 300000,
     telegram_bot_token_enc: input.telegramBotToken ? encrypt(input.telegramBotToken) : null,
     telegram_chat_id: input.telegramChatId || null,
+    telegram_focus_chat_id: input.telegramFocusChatId || null,
   });
   return getAccount(id);
 }
@@ -238,13 +242,15 @@ export function updateAccount(id, input) {
     netradyne_poll_ms: input.netradynePollMs != null ? Number(input.netradynePollMs) : a.netradyne_poll_ms,
     telegram_bot_token_enc: input.telegramBotToken != null ? (input.telegramBotToken ? encrypt(input.telegramBotToken) : null) : a.telegram_bot_token_enc,
     telegram_chat_id: input.telegramChatId ?? a.telegram_chat_id,
+    telegram_focus_chat_id: input.telegramFocusChatId ?? a.telegram_focus_chat_id,
     id,
   };
   db.prepare(`UPDATE accounts SET name=@name, geotab_server=@geotab_server, geotab_database=@geotab_database,
     geotab_username=@geotab_username, geotab_password_enc=@geotab_password_enc,
     netradyne_email=@netradyne_email, netradyne_password_enc=@netradyne_password_enc,
     netradyne_poll_ms=@netradyne_poll_ms, telegram_bot_token_enc=@telegram_bot_token_enc,
-    telegram_chat_id=@telegram_chat_id WHERE id=@id`).run(next);
+    telegram_chat_id=@telegram_chat_id, telegram_focus_chat_id=@telegram_focus_chat_id
+    WHERE id=@id`).run(next);
   return getAccount(id);
 }
 
@@ -286,6 +292,7 @@ export function getAccountCredentials(id) {
     telegram: {
       botToken: a.telegram_bot_token_enc ? decrypt(a.telegram_bot_token_enc) : "",
       chatId: a.telegram_chat_id || "",
+      focusChatId: a.telegram_focus_chat_id || "",
     },
   };
 }
@@ -301,9 +308,11 @@ export function publicAccount(a) {
     geotabUsername: a.geotab_username,      // non-secret identifier (email); password never exposed
     netradyneEmail: a.netradyne_email,      // non-secret identifier; password never exposed
     telegramChatId: a.telegram_chat_id,
+    telegramFocusChatId: a.telegram_focus_chat_id,
     hasGeotab: Boolean(a.geotab_username && a.geotab_password_enc),
     hasNetradyne: Boolean(a.netradyne_email && a.netradyne_password_enc),
     hasTelegram: Boolean(a.telegram_chat_id),
+    hasTelegramFocus: Boolean(a.telegram_focus_chat_id),
     // The account's own extension API key (shown to its owner/dispatchers to configure
     // the browser extension). It only ever accompanies the user's own account.
     apiKey: a.api_key || null,

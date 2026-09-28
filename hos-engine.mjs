@@ -1,8 +1,9 @@
 // hos-engine.mjs — per-account HOS alert engine.
-// Polls each account's Geotab, detects HOS risks at 60 and 30 minutes remaining
-// on any clock (break/driving/duty/cycle), and routes alerts to that account's
-// users via push + Telegram. Each (account, driver, metric, threshold) fires once
-// per cooldown window.
+// Polls each account's Geotab, detects HOS risks at 60, 30 and 20 minutes
+// remaining on any clock (break/driving/duty/cycle), and routes alerts to that
+// account's users via push + Telegram. Each (account, driver, metric, threshold)
+// fires once per cooldown window, so a clock winding down alerts at each tier.
+// The 20-minute tier is also copied to the account's Telegram focus group.
 import dotenv from "dotenv";
 import { listAccounts, getAccountCredentials } from "./db.mjs";
 import { computeReadiness } from "./geotab.mjs";
@@ -11,6 +12,8 @@ dotenv.config();
 
 const WARNING_MINUTES = 60;
 const CRITICAL_MINUTES = 30;
+// Last-chance tier: any clock at 20 minutes or less. Also goes to the focus group.
+const URGENT_MINUTES = 20;
 // Don't re-send the same (driver, metric, threshold) within this window. Lower it
 // (e.g. HOS_RESEND_COOLDOWN_MS=0) to see every poll's alerts while testing.
 const RESEND_COOLDOWN_MS = Number(process.env.HOS_RESEND_COOLDOWN_MS ?? 30 * 60 * 1000);
@@ -45,7 +48,7 @@ function parseDisplayToMinutes(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Return the risks for one driver at the 60/30 thresholds.
+// Return the risks for one driver at the 60/30/20 thresholds.
 function driverRisks(driver) {
   if (!isOnDuty(driver.currentStatus || driver.status)) return [];
   const metrics = [
@@ -58,7 +61,9 @@ function driverRisks(driver) {
   for (const [metric, label, display] of metrics) {
     const minutes = parseDisplayToMinutes(display);
     if (minutes == null || minutes < 0) continue;
-    if (minutes <= CRITICAL_MINUTES) {
+    if (minutes <= URGENT_MINUTES) {
+      risks.push({ metric, label, display: display || "--", minutes, threshold: 20, tier: "urgent" });
+    } else if (minutes <= CRITICAL_MINUTES) {
       risks.push({ metric, label, display: display || "--", minutes, threshold: 30, tier: "critical" });
     } else if (minutes <= WARNING_MINUTES) {
       risks.push({ metric, label, display: display || "--", minutes, threshold: 60, tier: "warning" });
@@ -101,15 +106,17 @@ async function pollAccount(account) {
       if (now - (sentAt.get(key) || 0) < RESEND_COOLDOWN_MS) continue;
       sentAt.set(key, now);
 
-      const isCritical = risk.tier === "critical";
-      const title = isCritical
-        ? `🚨 HOS CRITICAL — ${driver.driverName}`
-        : `⏰ HOS Warning — ${driver.driverName}`;
+      const isUrgent = risk.tier === "urgent";
+      const isCritical = isUrgent || risk.tier === "critical";
+      const head = isUrgent
+        ? "⛔ HOS 20 MIN"
+        : (isCritical ? "🚨 HOS CRITICAL" : "⏰ HOS Warning");
+      const title = `${head} — ${driver.driverName}`;
       const body = isCritical
         ? `${risk.label} runs out in ${risk.minutes} min (${risk.display} left). Act now.`
         : `${risk.label}: ${risk.display} left (~${risk.minutes} min).`;
       const telegramText = [
-        `${isCritical ? "🚨 HOS CRITICAL" : "⏰ HOS Warning"}`,
+        head,
         `Driver: ${driver.driverName}`,
         `${risk.label}: ${risk.display} left (~${risk.minutes} min)`,
         `Duty status: ${driver.currentStatus}`,
@@ -122,6 +129,8 @@ async function pollAccount(account) {
         critical: true, // all HOS alerts are high-urgency so no one misses them
         url: "/index.html",
         telegramText,
+        // 20-minutes-left on any clock is also copied to the focus group.
+        telegramFocus: isUrgent,
       });
       alerts += 1;
     }
@@ -150,5 +159,5 @@ export function startHosEngine() {
     setTimeout(loop, nextDelay());
   };
   loop();
-  console.log(`HOS alert engine started (randomized ${Math.round(minMs / 1000)}–${Math.round(maxMs / 1000)}s; thresholds 60 & 30 min)`);
+  console.log(`HOS alert engine started (randomized ${Math.round(minMs / 1000)}–${Math.round(maxMs / 1000)}s; thresholds 60, 30 & 20 min)`);
 }

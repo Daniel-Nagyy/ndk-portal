@@ -218,6 +218,18 @@ const disputeSaveTimers = {};
     "424011", "122107", "320142", "122102", "521249", "320150", "521244", "521117",
     "122103", "521105", "122105", "322141", "521079", "521096", "122424",
   ];
+
+  // Triple J's Netradyne roster. Same [name, id] shape as NETRADYNE_DRIVERS so the
+  // dropdowns and the name matcher behave identically for both accounts.
+  const TRIPLE_J_NETRADYNE_DRIVERS = [
+  ];
+
+  // The Netradyne roster for an account. Pass a row's clientId; omit it (or pass
+  // undefined) to fall back to the signed-in user's account.
+  function netradyneDriversFor(clientId) {
+    const id = clientId === undefined ? getCurrentUser()?.clientId : clientId;
+    return isTripleJClient(id) ? TRIPLE_J_NETRADYNE_DRIVERS : NETRADYNE_DRIVERS;
+  }
   let ownerHosSearchText = "";
   let ownerHosStatusFilter = "";
   let ownerHosSortFilter = "violationRisk"; // default: highest-risk drivers first
@@ -785,9 +797,11 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
           geotabUsername: a.geotabUsername || "",
           netradyneEmail: a.netradyneEmail || "",
           telegramChatId: a.telegramChatId || "",
+          telegramFocusChatId: a.telegramFocusChatId || "",
           hasGeotab: Boolean(a.hasGeotab),
           hasNetradyne: Boolean(a.hasNetradyne),
           hasTelegram: Boolean(a.hasTelegram),
+          hasTelegramFocus: Boolean(a.hasTelegramFocus),
         }));
       }
       if (usrRes && usrRes.success) {
@@ -1044,7 +1058,7 @@ function renderNetradyneDashboard(user) {
     }
     const term = netradyneRecapSearch.trim().toLowerCase();
     if (!term) return rows;
-    const keys = ["driverName", "netradyneDriverId", "vehicleNumber", "sessionId", "observations", "severity", "disputeNotes", "dateTime", "alertCount"];
+    const keys = ["driverName", "netradyneDriverId", "vehicleNumber", "sessionId", "observations", "severity", "disputeNotes", "dateTime"];
     return rows.filter((row) => keys.some((k) => String(row[k] || "").toLowerCase().includes(term)));
   }
 
@@ -1078,7 +1092,6 @@ function renderNetradyneDashboard(user) {
       id: `nr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       clientId: netradyneRecapClientIdFor(user),
       dailyDate: selectedNetradyneDate,
-      alertCount: "",
       driverName: "",
       netradyneDriverId: "",
       dateTime: "",
@@ -1136,8 +1149,8 @@ function renderNetradyneDashboard(user) {
   }
 
   // Parse pasted Netradyne "View Event Summary" text into recap rows (one per event).
-  function parseNetradynePaste(text) {
-    const lines = String(text).split(/\r?\n/).map((l) => l.replace(/^\s*\*\s*/, "").trim());
+function parseNetradynePaste(text, clientId) {
+      const lines = String(text).split(/\r?\n/).map((l) => l.replace(/^\s*\*\s*/, "").trim());
     const isTime = (l) => /^\d{1,2}:\d{2}:\d{2}\s*(AM|PM)\b/i.test(l);
     const isDate = (l) => /^[A-Za-z]{3,}\s+\d{1,2}\s+\d{4}$/.test(l);
     const isVehicle = (l) => /^\d{6,7}$/.test(l);
@@ -1162,12 +1175,11 @@ function renderNetradyneDashboard(user) {
 
     return events.map((ev) => {
       const driverRaw = ev.text.length ? ev.text[ev.text.length - 1] : "";
-      const hit = findRosterDriver(driverRaw);
+      const hit = findRosterDriver(driverRaw, clientId);
       let observations = ev.text.slice(0, -1).join(" - ");
       if (ev.duration) observations += `${observations ? " " : ""}(${ev.duration.replace(/^Alert Duration\s*:\s*/i, "")})`;
       const { dt, ymd } = netradynePasteDateTime(ev.date, ev.time);
       return {
-        alertCount: "1",
         driverName: hit ? hit[0] : "",
         driverNameRaw: driverRaw,
         netradyneDriverId: hit ? hit[1] : "",
@@ -1202,9 +1214,9 @@ function renderNetradyneDashboard(user) {
     overlay.querySelector(".dispute-import-text").focus();
     overlay.querySelector("[data-imp-go]").addEventListener("click", () => {
       const text = overlay.querySelector(".dispute-import-text").value;
-      const parsed = parseNetradynePaste(text);
-      if (!parsed.length) { showToast("Nothing to import — no events found."); return; }
       const clientId = netradyneRecapClientIdFor(user);
+const parsed = parseNetradynePaste(text, clientId);
+      if (!parsed.length) { showToast("Nothing to import — no events found."); return; }
       let firstYmd = "";
       parsed.forEach((p, i) => {
         if (!firstYmd && p.ymd) firstYmd = p.ymd;
@@ -1212,7 +1224,6 @@ function renderNetradyneDashboard(user) {
           id: `nr-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
           clientId,
           dailyDate: p.ymd || selectedNetradyneDate,
-          alertCount: p.alertCount,
           driverName: p.driverName,
           netradyneDriverId: p.netradyneDriverId,
           dateTime: p.dateTime,
@@ -1249,7 +1260,7 @@ function renderNetradyneDashboard(user) {
       let dt = "", ymd = "";
       const d = a.occurredAt ? new Date(a.occurredAt) : null;
       if (d && !isNaN(d)) { ymd = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; dt = `${ymd}T${p(d.getHours())}:${p(d.getMinutes())}`; }
-      const hit = findRosterDriver(a.driverName || "");
+      const hit = findRosterDriver(a.driverName || "", clientId);
       let obs = a.eventType || "";
       if (a.eventCategory && a.eventCategory !== a.eventType) obs += `${obs ? " - " : ""}${a.eventCategory}`;
       if (a.durationSeconds) obs += `${obs ? " " : ""}(${Math.floor(a.durationSeconds / 60)}m ${a.durationSeconds % 60}s)`;
@@ -1258,7 +1269,6 @@ function renderNetradyneDashboard(user) {
         id: `nr-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
         clientId,
         dailyDate: ymd || selectedNetradyneDate,
-        alertCount: "1",
         driverName: hit ? hit[0] : "",
         netradyneDriverId: hit ? hit[1] : "",
         dateTime: dt,
@@ -1283,7 +1293,7 @@ function renderNetradyneDashboard(user) {
 
   function renderNetradyneDriverSelect(row, editable) {
     if (!editable) return `<span>${escapeHtml(row.driverName || "-")}</span>`;
-    const opts = NETRADYNE_DRIVERS.map(([name, id]) =>
+    const opts = netradyneDriversFor(row.clientId).map(([name, id]) =>
       `<option value="${escapeHtml(id)}" ${row.netradyneDriverId === id ? "selected" : ""}>${escapeHtml(name)}</option>`
     ).join("");
     return `
@@ -1314,7 +1324,6 @@ function renderNetradyneDashboard(user) {
     return `
       <tr>
         <td class="row-number">${index}</td>
-        <td>${nrInput(row, "alertCount", editable)}</td>
         <td class="driver-cell">${renderNetradyneDriverSelect(row, editable)}</td>
         <td class="id-cell">${editable ? `<textarea class="nr-id-box" rows="2" data-nr-field="netradyneDriverId" data-nr-id="${row.id}" readonly title="Auto-filled from the selected driver">${escapeHtml(row.netradyneDriverId)}</textarea>` : `<span class="compact">${escapeHtml(row.netradyneDriverId || "-")}</span>`}</td>
         <td>${nrInput(row, "dateTime", editable, "datetime-local")}</td>
@@ -1351,12 +1360,11 @@ function renderNetradyneDashboard(user) {
     }
     return `
       <div class="table-wrap">
-        <table class="recap-table nr-table" ${fixedTableStyle([46, 95, 160, 240, 185, 150, 125, 250, 140, 250, 80], editable)}>
-          ${colgroupHtml([46, 95, 160, 240, 185, 150, 125, 250, 140, 250, 80], editable)}
+        <table class="recap-table nr-table" ${fixedTableStyle([46, 160, 240, 185, 150, 125, 250, 140, 250, 80], editable)}>
+          ${colgroupHtml([46, 160, 240, 185, 150, 125, 250, 140, 250, 80], editable)}
           <thead>
             <tr>
               <th class="row-number">#</th>
-              <th>Number of Alerts</th>
               <th>Driver Name</th>
               <th>Netradyne Driver ID</th>
               <th>Date and Time</th>
@@ -1390,7 +1398,7 @@ function renderNetradyneDashboard(user) {
                 <div class="rcv-driver">
                   <div>
                     <strong class="rcv-name">${escapeHtml(row.driverName || "Unknown driver")}</strong>
-                    <span class="rcv-sub">Truck ${escapeHtml(row.vehicleNumber || "–")} · ${escapeHtml(row.alertCount || "0")} alert(s)</span>
+                    <span class="rcv-sub">Truck ${escapeHtml(row.vehicleNumber || "–")}</span>
                   </div>
                 </div>
                 <div class="rcv-badges">
@@ -1399,7 +1407,6 @@ function renderNetradyneDashboard(user) {
                 </div>
               </div>
               <div class="recap-details" style="display:${isExpanded ? "grid" : "none"};">
-                ${field("Number of Alerts", row.alertCount)}
                 ${field("Netradyne Driver ID", row.netradyneDriverId)}
                 ${field("Date and Time", row.dateTime)}
                 ${field("Alert ID", row.alertId)}
@@ -1476,7 +1483,6 @@ function renderNetradyneDashboard(user) {
     const rows = visibleNetradyneRecaps(user);
     const cols = [
       ["#", (r, i) => i + 1, "col-num"],
-      ["Alerts", (r) => r.alertCount, "col-num"],
       ["Driver Name", (r) => r.driverName, "wrap col-driver"],
       ["Netradyne Driver ID", (r) => r.netradyneDriverId, "wrap col-vrids"],
       ["Date and Time", (r) => r.dateTime, ""],
@@ -1851,7 +1857,7 @@ function renderNetradyneDashboard(user) {
 
   function renderDisputeDriverSelect(row, editable) {
     if (!editable) return `<span>${escapeHtml(row.driverName || "-")}</span>`;
-    const opts = NETRADYNE_DRIVERS.map(([name]) =>
+    const opts = netradyneDriversFor(row.clientId).map(([name]) =>
       `<option value="${escapeHtml(name)}" ${row.driverName === name ? "selected" : ""}>${escapeHtml(name)}</option>`
     ).join("");
     return `
@@ -2155,7 +2161,7 @@ function renderNetradyneDashboard(user) {
   // Find the roster entry [name, id] for a pasted driver name, tolerating middle
   // names, suffixes (JR/III), punctuation and apostrophes. Returns null if no match
   // (e.g. "Unknown driver").
-  function findRosterDriver(raw) {
+  function findRosterDriver(raw, clientId) {
     if (!raw) return null;
     const SUFFIX = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
     const clean = (s) => s.toLowerCase().replace(/\(.*?\)/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -2165,9 +2171,10 @@ function renderNetradyneDashboard(user) {
     if (!rawT.length || rawN === "unknown driver") return null;
     const first = rawT[0], last = rawT[rawT.length - 1];
     const rawSet = new Set(rawT);
-    const find = (fn) => NETRADYNE_DRIVERS.find(([name]) => fn(toks(name)));
+    const roster = netradyneDriversFor(clientId);
+    const find = (fn) => roster.find(([name]) => fn(toks(name)));
     return (
-      NETRADYNE_DRIVERS.find(([name]) => clean(name) === rawN) ||                                   // 1. exact
+      roster.find(([name]) => clean(name) === rawN) ||                                   // 1. exact
       find((t) => t[0] === first && t[t.length - 1] === last) ||                                    // 2. same first + last
       find((t) => t[t.length - 1] === last && (t[0].startsWith(first) || first.startsWith(t[0]))) || // 3. last + first-prefix
       find((t) => t.length && t.every((w) => rawSet.has(w))) ||                                      // 4. roster tokens ⊆ pasted
@@ -2175,8 +2182,8 @@ function renderNetradyneDashboard(user) {
     );
   }
 
-  function matchDisputeDriver(raw) {
-    const hit = findRosterDriver(raw);
+  function matchDisputeDriver(raw, clientId) {
+    const hit = findRosterDriver(raw, clientId);
     return hit ? hit[0] : raw;
   }
 
@@ -4372,8 +4379,26 @@ function renderRecapRow(row, index, editable) {
   }
 
 function makeTripleJTourReminderMessage(row) {
-  const date = formatTripleJMessageDate(row.dailyDate);
-  const time = formatTripleJMessageTime(row.stopOneupcoming);
+  const tripDateValue = String(
+    row.tripDate ||
+    row.blockAnchorTime ||
+    ""
+  ).trim();
+
+  const match = tripDateValue.match(
+    /^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})(?::\d{2})?$/
+  );
+
+  const anchorDate =
+    match?.[1] ||
+    row.dailyDate;
+
+  const anchorTime =
+    match?.[2] ||
+    row.stopOneupcoming;
+
+  const date = formatTripleJMessageDate(anchorDate);
+  const time = formatTripleJMessageTime(anchorTime);
 
   return `Hello ${row.driverAssigned || "—"}, just a reminder that you are scheduled on ${date} at ${time}. Please confirm you received this message so we know you will be arriving as scheduled.
 
@@ -5139,6 +5164,7 @@ ${lowFuelLine}
                         ${badge(client.hasGeotab, "Geotab")}
                         ${badge(client.hasNetradyne, "Netradyne")}
                         ${badge(client.hasTelegram, "Telegram")}
+                        ${badge(client.hasTelegramFocus, "Focus group")}
                       </div>
                       <div style="display:flex;gap:8px;align-items:center">
                         <input readonly value="${escapeHtml(client.apiKey || "")}"
@@ -5208,6 +5234,11 @@ ${lowFuelLine}
           <div class="field">
             <label>Telegram chat ID <span style="opacity:.6">(optional)</span></label>
             <input name="telegramChatId" autocomplete="off" placeholder="-100..." value="${editing ? v(editing.telegramChatId) : ""}" />
+          </div>
+          <div class="field">
+            <label>Telegram focus group chat ID <span style="opacity:.6">(optional)</span></label>
+            <input name="telegramFocusChatId" autocomplete="off" placeholder="-100..." value="${editing ? v(editing.telegramFocusChatId) : ""}" />
+            <span style="opacity:.6;font-size:.78rem">Same bot, second group — only roadside parking, distraction and drowsiness alerts, plus any HOS clock at 20 minutes left. The main chat still gets everything.</span>
           </div>
         </div>
         <div class="inline-form-actions">
@@ -6091,7 +6122,7 @@ case "hos-close-filters":
       const row = netradyneRecaps.find((r) => r.id === nrDriver.dataset.nrId);
       if (!row) return;
       const id = nrDriver.value;
-      const match = NETRADYNE_DRIVERS.find(([, driverId]) => driverId === id);
+      const match = netradyneDriversFor(row.clientId).find(([, driverId]) => driverId === id);
       row.netradyneDriverId = id;
       row.driverName = match ? match[0] : "";
       addAudit(`${getCurrentUser().name} set Netradyne driver to ${row.driverName || "—"}.`);
@@ -6399,6 +6430,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
           netradynePassword: data.netradynePassword || undefined,
           telegramBotToken: data.telegramBotToken || undefined,
           telegramChatId: t(data.telegramChatId),
+          telegramFocusChatId: t(data.telegramFocusChatId),
         }
       : {
           name,
@@ -6410,6 +6442,7 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
           netradynePassword: data.netradynePassword || undefined,
           telegramBotToken: t(data.telegramBotToken) || undefined,
           telegramChatId: t(data.telegramChatId) || undefined,
+          telegramFocusChatId: t(data.telegramFocusChatId) || undefined,
         };
     try {
       const res = await fetch("/api/admin/accounts", {
@@ -6476,6 +6509,7 @@ async function importTripsCsvFile(file, user) {
 
   let created = 0;
   let updated = 0;
+  const appliedRows = [];
 
   importedRows.forEach((incoming) => {
     const existing = state.recaps.find((row) => {
@@ -6499,6 +6533,12 @@ async function importTripsCsvFile(file, user) {
     });
 
     if (existing) {
+      const originalBlockAnchorTime =
+        existing.blockAnchorTime ||
+        existing.tripDate ||
+        incoming.blockAnchorTime ||
+        incoming.tripDate;
+
       const manualFields = {
         id: existing.id,
         shiftId: existing.shiftId,
@@ -6516,18 +6556,27 @@ async function importTripsCsvFile(file, user) {
         bol: existing.bol,
         blockDeepDive: existing.blockDeepDive,
         startingMessage: existing.startingMessage,
+        ...(tripleJ
+          ? {
+              dailyDate: existing.dailyDate || incoming.dailyDate,
+              blockAnchorTime: originalBlockAnchorTime,
+              tripDate: originalBlockAnchorTime,
+            }
+          : {}),
       };
 
       Object.assign(existing, incoming, manualFields);
+      appliedRows.push(existing);
       updated += 1;
     } else {
       state.recaps.push(incoming);
+      appliedRows.push(incoming);
       created += 1;
     }
   });
 
-  refreshRecapDays(clientId, importedRows, file.name);
-  selectedRecapDate = getPrimaryImportedDate(importedRows);
+  refreshRecapDays(clientId, appliedRows, file.name);
+  selectedRecapDate = getPrimaryImportedDate(appliedRows);
   recapFilter = "all";
 
   addAudit(
@@ -6673,150 +6722,30 @@ function buildImportedRecapRows(csvRows, clientId, user, fileName) {
     const earliestActual = earliestDateTime(actualStopOneTimes);
     const latestFinal = latestDateTime(finalupcomingTimes);
 
-    const dailyDate =
-      earliestStopOne?.date ||
-      selectedRecapDate ||
-      todayISO();
-
-    const loadIds = unique(
-      groupRows
-        .map((row) => csvValue(row, "Load ID"))
-        .filter(Boolean)
-    );
-
-    const truck = firstNonEmpty(groupRows, [
-      "Tractor Vehicle ID",
-    ]);
-
-    return {
-      id: makeId("r"),
-      clientId,
-      dailyDate,
-      shiftId: null,
-      assignedDispatcherId:
-        user.role === "dispatcher" ? user.id : null,
-      driverAssigned:
-        firstNonEmpty(groupRows, ["Driver Name"]) ||
-        "Unassigned Driver",
-      tripDate: earliestStopOne
-        ? `${earliestStopOne.date} ${earliestStopOne.time}`
-        : `${dailyDate} 00:00`,
-      status: mapTripStatus(
-        firstNonEmpty(groupRows, [
-          "Trip Stage",
-          "Load Execution Status",
-        ])
-      ),
-      tripId,
-      blockId: blockId || "Pending Block",
-      vrids: loadIds,
-      solo: detectSoloType(groupRows),
-      truck,
-      dvir: "Not Started",
-      fuel: "",
-      onDuty: "",
-      requestedStart: earliestStopOne
-        ? subtractMinutes(
-            earliestStopOne.time,
-            recapStartOffsetMinutes(clientId)
+    const tripleJBlockAnchor = tripleJ
+      ? groupRows
+          .map((row) =>
+            dateTimeFromCsv(
+              row,
+              "Stop 1 Planned Arrival Date",
+              "Stop 1 Planned Arrival Time"
+            )
           )
-        : "",
-      stopOneupcoming: earliestStopOne?.time || "",
-      actualCheckIn: earliestActual
-        ? `${earliestActual.date} ${earliestActual.time}`
-        : "",
-      scheduledFinal: latestFinal?.time || "",
-      finalArrivalHome: "",
-      driverLogOff: "",
-      startMessageSent: false,
-      lateFirstStop: false,
-      issues: "",
-      bol: "Pending",
-      blockDeepDive: "",
-      startingMessage: "",
-      importSource: fileName,
-      importedAt: new Date().toISOString(),
-      sourceLoadCount: groupRows.length,
-    };
-  });
-}function buildImportedRecapRows(csvRows, clientId, user, fileName) {
-  const grouped = new Map();
-  const tripleJ = isTripleJClient(clientId);
+          .find(Boolean)
+      : null;
 
-  csvRows.forEach((csvRow, index) => {
-    const blockId = csvValue(csvRow, "Block ID");
-    const tripId = csvValue(csvRow, "Trip ID");
-    const loadId = csvValue(csvRow, "Load ID");
-
-    if (tripleJ) {
-      if (!blockId && !tripId) return;
-
-      const key = blockId
-        ? `BLOCK::${blockId}`
-        : `TRIP::${tripId || loadId || index}`;
-
-      if (!grouped.has(key)) {
-        grouped.set(key, []);
-      }
-
-      grouped.get(key).push(csvRow);
-      return;
-    }
-
-    if (!tripId) return;
-
-    const key = `${blockId || "NO-BLOCK"}::${tripId || loadId || index}`;
-
-    if (!grouped.has(key)) {
-      grouped.set(key, []);
-    }
-
-    grouped.get(key).push(csvRow);
-  });
-
-  return [...grouped.values()].map((groupRows) => {
-    const first = groupRows[0];
-    const blockId = csvValue(first, "Block ID");
-    const tripId = csvValue(first, "Trip ID");
-
-    const stopOneTimes = groupRows
-      .map((row) =>
-        dateTimeFromCsv(
-          row,
-          "Stop 1 Planned Arrival Date",
-          "Stop 1 Planned Arrival Time"
-        )
-      )
-      .filter(Boolean);
-
-    const actualStopOneTimes = groupRows
-      .map((row) =>
-        dateTimeFromCsv(
-          row,
-          "Stop 1 Actual Arrival Date",
-          "Stop 1 Actual Arrival Time"
-        )
-      )
-      .filter(Boolean);
-
-    const finalupcomingTimes = groupRows
-      .map((row) =>
-        dateTimeFromCsv(
-          row,
-          "Stop 2 Planned Arrival Date",
-          "Stop 2 Planned Arrival Time"
-        )
-      )
-      .filter(Boolean);
-
-    const earliestStopOne = earliestDateTime(stopOneTimes);
-    const earliestActual = earliestDateTime(actualStopOneTimes);
-    const latestFinal = latestDateTime(finalupcomingTimes);
+    const importedAnchor = tripleJ
+      ? tripleJBlockAnchor || earliestStopOne
+      : earliestStopOne;
 
     const dailyDate =
-      earliestStopOne?.date ||
+      importedAnchor?.date ||
       selectedRecapDate ||
       todayISO();
+
+    const importedTripDate = importedAnchor
+      ? `${importedAnchor.date} ${importedAnchor.time}`
+      : `${dailyDate} 00:00`;
 
     const loadIds = unique(
       groupRows
@@ -6838,9 +6767,8 @@ function buildImportedRecapRows(csvRows, clientId, user, fileName) {
       driverAssigned:
         firstNonEmpty(groupRows, ["Driver Name"]) ||
         "Unassigned Driver",
-      tripDate: earliestStopOne
-        ? `${earliestStopOne.date} ${earliestStopOne.time}`
-        : `${dailyDate} 00:00`,
+      tripDate: importedTripDate,
+      blockAnchorTime: tripleJ ? importedTripDate : "",
       status: mapTripStatus(
         firstNonEmpty(groupRows, [
           "Trip Stage",
