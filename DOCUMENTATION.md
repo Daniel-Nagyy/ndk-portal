@@ -126,7 +126,9 @@ guarantees one account's alerts never reach another account's phones.
 | `hos-engine.mjs` | Background loop: per-account Geotab poll, fires HOS alerts at 60/30 min. |
 | `notify.mjs` | `notifyAccount` → Web Push (`sendPushToAccount`) + Telegram (`sendTelegramToAccount`). |
 | `push.mjs` | VAPID setup / public key. |
-| `ingest-store.mjs` | In-memory per-account store for live Relay late-items from the extension. |
+| `ingest-store.mjs` | In-memory per-account store for live Relay late-items and stop events from the extension. |
+| `tour-watch.mjs` | Background loop: off duty at a stop, and stopped outside a site. |
+| `name-match.mjs` | Matches one driver across Geotab / Relay / extension name spellings. |
 | `netradyne/auth.js` | Per-account Playwright Chromium login to Netradyne. |
 | `netradyne/scraper.js` | Captures Netradyne alert API responses, maps event codes → severity. |
 | `netradyne/poller.js` | Per-account Netradyne polling loop (staggered, min 5-min interval). |
@@ -285,10 +287,67 @@ extension ──POST /api/ingest/alert (X-API-Key)──▶ getAccountByApiKey(k
 `PATCH /api/netradyne/alerts/:id`, `GET /api/netradyne/status`.
 
 **Extension ingest (X-API-Key):** `POST /api/ingest/late-items`,
-`POST /api/ingest/alert`, `GET /api/ingest/status`, `GET /api/late-items`.
+`POST /api/ingest/site-state`, `POST /api/ingest/alert`,
+`GET /api/ingest/status`, `GET /api/late-items`.
 
 **Push:** `GET /api/push/vapid-public-key`, `POST /api/push/subscribe`,
 `POST /api/push/unsubscribe`.
+
+### Tour watch (`tour-watch.mjs`)
+
+Entirely live: duty status from Geotab, stop events from the extension. It reads
+**nothing** from the imported recap/Trips CSV, so an import schedule can never
+make it wrong or stale. Polls every 90–180s per account and sends to the
+account's **main** Telegram group (never the focus group).
+
+**Inside a site** means the driver checked in and his next event is a departure.
+The newer of `arrivedAt` / `departedAt` wins, so arrive → depart → arrive again
+reads as inside. A driver with neither timestamp is **unknown** and is skipped —
+never guessed at.
+
+1. **Off duty at a stop** — the driver arrived at or departed from a stop within
+   the previous `TOUR_EVENT_WINDOW_MINUTES` (15) and Geotab does not show `ON`,
+   `D` or `YM`. `OFF`, `SB` and `PC` all count as not working.
+2. **Stopped outside a site** — duty status is `ON`/`OFF`/`SB`, it has been that
+   way for at least `TOUR_STOPPED_MINUTES` (5), and his last stop event was a
+   **departure** (so he is between stops).
+
+Both can fire for one driver: being off duty at a stop and being stopped away
+from a site are different facts.
+
+#### What the extension must push
+
+The engine is **idle** until site state arrives, and goes quiet again if nothing
+is pushed for `TOUR_SITE_STALE_MINUTES` (20). Post the **full current roster** of
+drivers on tour each time:
+
+```
+POST /api/ingest/site-state      X-API-Key: <account api_key>
+
+[ { "driverName": "Dillard, Russell",
+    "siteName":   "ATL40",
+    "arrivedAt":  "2026-10-03T18:05:00Z",   // last check-in
+    "departedAt": "",                        // last departure; empty = still inside
+    "inSite":     true,                      // optional, overrides the above
+    "tripId":     "T-112LN58YK",
+    "blockId":    "BLK-9931" } ]
+```
+
+- `{ "drivers": [ ... ] }` is accepted as well as a bare array.
+- Timestamps are ISO 8601 (UTC). They drive **both** alerts: the newer one decides
+  inside/outside, and its age decides the 15-minute window.
+- Keep sending a driver after he departs, with `departedAt` set — that is exactly
+  the state alert 2 looks for. Dropping him from the roster makes him unknown and
+  silences the alert.
+- Entries with no `driverName` are dropped.
+- Check delivery with `GET /api/ingest/status`: `siteUpdatedAt`, `siteCount`,
+  `siteInCount`, `siteOutCount`.
+
+#### Tuning (env)
+
+`TOUR_EVENT_WINDOW_MINUTES` (15), `TOUR_STOPPED_MINUTES` (5),
+`TOUR_SITE_STALE_MINUTES` (20), `TOUR_RESEND_COOLDOWN_MS` (30 min),
+`TOUR_WATCH_MIN_POLL_MS` / `TOUR_WATCH_MAX_POLL_MS`, `PORTAL_TIMEZONE`.
 
 **Testing:** `GET /api/test-alert?apiKey=<key>&type=hos|netradyne&critical=1|0`
 — sends a real alert to a specific account and returns the delivery result

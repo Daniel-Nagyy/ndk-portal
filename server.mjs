@@ -20,13 +20,14 @@ import {
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey
 } from './db.mjs';
-import { setLateItems, getLateItems, getIngestStatus } from './ingest-store.mjs';
+import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
 
 // Per-account dedupe for live extension alerts (accountId:dedupeKey -> lastSentMs).
 const alertDedupe = new Map();
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
 import { startHosEngine } from './hos-engine.mjs';
+import { startTourWatch } from './tour-watch.mjs';
 import { notifyAccount, sendPushToAccount } from './notify.mjs';
 dotenv.config();
 
@@ -382,6 +383,15 @@ const requestHandler = (req, res) => {  // CORS Headers
           const items = Array.isArray(body) ? body : (body.lateItems || body.items || []);
           setLateItems(account.id, items);
           return sendJson(200, { success: true, account: account.id, count: items.length });
+        }
+        // Live site presence for the tour watch: the FULL current roster each push,
+        // so a driver missing from the list is read as "not inside a site".
+        //   [{ driverName, inSite?, siteName?, arrivedAt?, departedAt? }, ...]
+        // inSite is used when present; otherwise arrival-without-departure means in.
+        if (iurl.pathname === '/api/ingest/site-state') {
+          const items = Array.isArray(body) ? body : (body.drivers || body.siteState || body.items || []);
+          const count = setSiteState(account.id, items);
+          return sendJson(200, { success: true, account: account.id, count });
         }
         if (iurl.pathname === '/api/ingest/alert') {
           // Push a live extension-detected alert (e.g. bobtail-not-cleared) to
@@ -1192,5 +1202,8 @@ server.listen(port, "0.0.0.0", () => {
 
   // Per-account HOS alert engine (Geotab → push + Telegram, 60 & 30 min thresholds).
   startHosEngine();
+
+  // Per-account tour watch (off duty when scheduled; stopped outside a site).
+  startTourWatch();
 });
 startPolling();

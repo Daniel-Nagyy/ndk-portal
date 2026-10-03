@@ -102,12 +102,23 @@ if (cmd === "test") {
 
   const result = await sendTelegramToAccount(accountId, text, { focus });
   if (result.ok) {
-    console.log(`Sent to the ${which} group for ${account.name}. Check Telegram.`);
+    console.log(`Sent to chat ${result.chatId} (${which} group, ${account.name}). Check Telegram.`);
     process.exit(0);
   }
-  console.error(`Not sent: ${result.skipped || result.error}`);
-  if (result.skipped === "no_focus_chat") console.error("Set one first with: set <accountId> focus <chatId>");
-  if (result.skipped === "not_configured") console.error("The account has no main chat id and/or no bot token.");
+
+  console.error(`NOT SENT to the ${which} group: ${result.skipped || result.error}`);
+  if (result.description) console.error(`Telegram said: ${result.description}`);
+  if (result.chatId) console.error(`Chat id tried: ${result.chatId}`);
+
+  const hint = {
+    no_bot_token: "This account has no Telegram bot token and TELEGRAM_BOT_TOKEN is not set in the env.",
+    no_focus_chat: `No focus chat id stored. Set one: node scripts/telegram-chat.mjs set ${accountId} focus <chatId>`,
+    not_configured: "No main chat id stored for this account.",
+    telegram_400: "Usually a wrong chat id, or the group was upgraded to a supergroup (its id changes to -100...). Re-read it from getUpdates.",
+    telegram_403: "The bot is not in that group, was removed, or is not allowed to post there. Add it and try again.",
+    telegram_404: "Bad bot token - the /bot<token> path was rejected.",
+  }[result.skipped || result.error];
+  if (hint) console.error(hint);
   process.exit(1);
 }
 
