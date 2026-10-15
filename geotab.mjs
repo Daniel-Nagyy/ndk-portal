@@ -649,6 +649,78 @@ async function computeReadinessMulti(credentials) {
 
 // Orchestrator: authenticate, fetch drivers, compute a readiness row for each.
 // credentials = { server, database, username, password }
+// ---------------------------------------------------------------------------
+// Vehicles, live positions and zones
+// ---------------------------------------------------------------------------
+// Everything above this point is HOS: drivers and duty status, no vehicles at
+// all. Answering "which trucks are in the yard" needs the fleet side instead -
+// the devices, where each one is right now, and the shape of the yard.
+//
+// All three Gets go through the SAME authenticate() as HOS, so the credential
+// circuit breaker still applies: a rejected password will not be retried here
+// either, and cannot be used to brute-force the account from a chat command.
+
+// Geotab returns every zone the user can see; the caller decides which are yards.
+export async function getZones(credentials) {
+  const server = credentials.server || DEFAULT_SERVER;
+  const auth = await authenticate({
+    database: credentials.database,
+    userName: credentials.username,
+    password: credentials.password,
+    server
+  });
+  const zones = await geotabCallWithRetry("Get", {
+    typeName: "Zone",
+    credentials: auth.credentials
+  }, { retries: 2, delayMs: 400, server });
+
+  return (zones || []).map((z) => ({
+    id: z.id,
+    name: z.name || "",
+    points: Array.isArray(z.points) ? z.points : []
+  }));
+}
+
+// Devices plus their latest known position, in one round trip.
+export async function getVehiclePositions(credentials) {
+  const server = credentials.server || DEFAULT_SERVER;
+  const auth = await authenticate({
+    database: credentials.database,
+    userName: credentials.username,
+    password: credentials.password,
+    server
+  });
+
+  const [devices, statuses] = await Promise.all([
+    geotabCallWithRetry("Get", {
+      typeName: "Device",
+      credentials: auth.credentials
+    }, { retries: 2, delayMs: 400, server }),
+    // DeviceStatusInfo is the current snapshot per device: position, speed and
+    // whether the unit is still reporting. Far cheaper than querying LogRecord.
+    geotabCallWithRetry("Get", {
+      typeName: "DeviceStatusInfo",
+      credentials: auth.credentials
+    }, { retries: 2, delayMs: 400, server })
+  ]);
+
+  return {
+    devices: (devices || []).map((d) => ({
+      id: d.id,
+      name: d.name || "",
+      licensePlate: d.licensePlate || "",
+      activeTo: d.activeTo || null
+    })),
+    statuses: (statuses || []).map((s) => ({
+      device: { id: s.device?.id || s.deviceId || "" },
+      latitude: s.latitude,
+      longitude: s.longitude,
+      dateTime: s.dateTime || null,
+      isDeviceCommunicating: s.isDeviceCommunicating
+    }))
+  };
+}
+
 export async function computeReadiness(credentials) {
   if (process.env.GEOTAB_MULTICALL === "1") {
     try {

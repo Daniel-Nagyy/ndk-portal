@@ -28,6 +28,8 @@ import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAcc
 import { computeReadiness } from './geotab.mjs';
 import { startHosEngine } from './hos-engine.mjs';
 import { startTourWatch } from './tour-watch.mjs';
+import { getZones, getVehiclePositions } from './geotab.mjs';
+import { isYardZone, trucksInYard } from './yard.mjs';
 import { notifyAccount, sendPushToAccount } from './notify.mjs';
 dotenv.config();
 
@@ -372,6 +374,73 @@ const requestHandler = (req, res) => {  // CORS Headers
         return sendJson(200, { success: true, accounts: out });
       }
       return sendJson(200, { success: true, accounts: [{ id: user.account_id, ...getIngestStatus(user.account_id) }] });
+    }
+    // Which account does this API key belong to? Read-only and side-effect free,
+    // so an extension can check at startup that its hardcoded key matches the
+    // account it believes it is serving. A copy of the extension cloned for a new
+    // account but left with the old key silently delivered every portal-routed
+    // alert to the previous company's Telegram group; this is how it is caught.
+    // Which active trucks are physically sitting in the yard right now.
+    // API-key authenticated so the Telegram bot in the extension can ask; the
+    // session-based /api/down-trucks is unreachable from there.
+    //   GET /api/ingest/trucks-in-yard[?fuel=CNG]
+    // Live Geotab positions decide "in the yard"; the Truck Tracker decides
+    // which of those are active and what fuel they burn.
+    if (iurl.pathname === '/api/ingest/trucks-in-yard' && req.method === 'GET') {
+      (async () => {
+        try {
+          const key = req.headers['x-api-key'] || iurl.searchParams.get('apiKey');
+          const acct = getAccountByApiKey(key);
+          if (!acct) return sendJson(401, { success: false, error: 'Invalid or missing API key' });
+
+          const creds = getAccountCredentials(acct.id);
+          if (!creds || !creds.geotab.database || !creds.geotab.username) {
+            return sendJson(400, { success: false, error: 'No Geotab credentials for this account' });
+          }
+
+          const fuel = String(iurl.searchParams.get('fuel') || '').trim();
+          const [zonesAll, positions] = await Promise.all([
+            getZones(creds.geotab),
+            getVehiclePositions(creds.geotab)
+          ]);
+
+          const zones = zonesAll.filter((z) => isYardZone(z));
+          if (!zones.length) {
+            return sendJson(200, {
+              success: true, account: acct.id, trucks: [], zones: [],
+              note: 'No Geotab zone looks like a yard (name must contain yard, domicile or terminal).'
+            });
+          }
+
+          const result = trucksInYard({
+            devices: positions.devices,
+            statuses: positions.statuses,
+            zones,
+            trucks: listDownTrucks(acct.id),
+            fuel
+          });
+
+          return sendJson(200, {
+            success: true,
+            account: acct.id,
+            fuel: fuel || null,
+            zones: zones.map((z) => z.name),
+            count: result.trucks.length,
+            trucks: result.trucks,
+            skipped: result.skipped
+          });
+        } catch (error) {
+          sendJson(500, { success: false, error: simplifyError(error) });
+        }
+      })();
+      return;
+    }
+
+    if (iurl.pathname === '/api/ingest/whoami' && req.method === 'GET') {
+      const key = req.headers['x-api-key'] || iurl.searchParams.get('apiKey');
+      const acct = getAccountByApiKey(key);
+      if (!acct) return sendJson(401, { success: false, error: 'Invalid or missing API key' });
+      return sendJson(200, { success: true, account: { id: acct.id, name: acct.name } });
     }
     (async () => {
       try {
