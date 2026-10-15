@@ -669,16 +669,38 @@ export async function getZones(credentials) {
     password: credentials.password,
     server
   });
-  const zones = await geotabCallWithRetry("Get", {
-    typeName: "Zone",
-    credentials: auth.credentials
-  }, { retries: 2, delayMs: 400, server });
+  // Zone types come back as references ("ZoneTypeHomeId", or a custom id), so
+  // fetch the type list too and resolve them to names. A real yard is often
+  // named only for its site code ("ATL40") and is identified purely by its
+  // type, e.g. "Home Yard" — without this the yard is invisible.
+  const [zones, zoneTypes] = await Promise.all([
+    geotabCallWithRetry("Get", {
+      typeName: "Zone",
+      credentials: auth.credentials
+    }, { retries: 2, delayMs: 400, server }),
+    geotabCallWithRetry("Get", {
+      typeName: "ZoneType",
+      credentials: auth.credentials
+    }, { retries: 1, delayMs: 400, server }).catch(() => [])
+  ]);
 
-  return (zones || []).map((z) => ({
-    id: z.id,
-    name: z.name || "",
-    points: Array.isArray(z.points) ? z.points : []
-  }));
+  const typeNameById = new Map();
+  for (const t of zoneTypes || []) {
+    if (t && t.id) typeNameById.set(String(t.id), String(t.name || ""));
+  }
+
+  return (zones || []).map((z) => {
+    const zoneTypeRefs = Array.isArray(z.zoneTypes) ? z.zoneTypes : [];
+    return {
+      id: z.id,
+      name: z.name || "",
+      points: Array.isArray(z.points) ? z.points : [],
+      zoneTypes: zoneTypeRefs,
+      typeNames: zoneTypeRefs
+        .map((ref) => typeNameById.get(String(ref?.id || ref || "")) || "")
+        .filter(Boolean)
+    };
+  });
 }
 
 // Devices plus their latest known position, in one round trip.

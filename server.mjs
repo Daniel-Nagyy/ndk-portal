@@ -408,7 +408,10 @@ const requestHandler = (req, res) => {  // CORS Headers
           if (!zones.length) {
             return sendJson(200, {
               success: true, account: acct.id, trucks: [], zones: [],
-              note: 'No Geotab zone looks like a yard (name must contain yard, domicile or terminal).'
+              note: 'No Geotab zone looks like a yard. Either the zone NAME must contain '
+                + 'yard, domicile or terminal, or its zone TYPE must be Home / Home Yard / '
+                + 'Domicile / Terminal. Zones seen: '
+                + (zonesAll.map((z) => `${z.name || '(unnamed)'}${z.typeNames?.length ? ` [${z.typeNames.join(', ')}]` : ''}`).join('; ') || 'none')
             });
           }
 

@@ -5,14 +5,41 @@
 // and zone polygons; this decides what is inside what, and which Truck Tracker
 // row a Geotab vehicle corresponds to.
 
-// Which zones count as "the yard". Geotab zone names vary by customer, so match
-// loosely rather than demanding one exact string.
-const DEFAULT_YARD_PATTERNS = [/\byard\b/i, /\bdomicile\b/i, /\bterminal\b/i];
+// Which zones count as "the yard".
+//
+// The name alone is not enough: a real yard is often just its site code, like
+// "ATL40", with the fact that it IS a yard carried by the Geotab zone TYPE
+// ("Home Yard"). So check the type as well as the name.
+const DEFAULT_YARD_NAME_PATTERNS = [/\byard\b/i, /\bdomicile\b/i, /\bterminal\b/i];
 
-export function isYardZone(zone, patterns = DEFAULT_YARD_PATTERNS) {
-  const name = String(zone?.name || "");
-  if (!name) return false;
-  return patterns.some((re) => re.test(name));
+// Zone types are a short controlled list, so "home" is safe to match here —
+// it is Geotab's built-in type for a fleet's own base. Matching "home" against
+// zone NAMES would wrongly catch customer sites like "Home Depot".
+const DEFAULT_YARD_TYPE_PATTERNS = [...DEFAULT_YARD_NAME_PATTERNS, /\bhome\b/i];
+
+// Geotab's built-in id for the Home zone type, used when the ZoneType lookup
+// could not be resolved to a name.
+const HOME_ZONE_TYPE_IDS = new Set(["ZoneTypeHomeId"]);
+
+export function isYardZone(zone, { namePatterns = DEFAULT_YARD_NAME_PATTERNS, typePatterns = DEFAULT_YARD_TYPE_PATTERNS } = {}) {
+  if (!zone) return false;
+
+  const name = String(zone.name || "");
+  if (name && namePatterns.some((re) => re.test(name))) return true;
+
+  // Resolved type names, attached by getZones().
+  for (const typeName of zone.typeNames || []) {
+    const text = String(typeName || "");
+    if (text && typePatterns.some((re) => re.test(text))) return true;
+  }
+
+  // Fall back to the raw type ids when names were not available.
+  for (const type of zone.zoneTypes || []) {
+    const id = String(type?.id || type || "");
+    if (HOME_ZONE_TYPE_IDS.has(id)) return true;
+  }
+
+  return false;
 }
 
 // Ray casting. Geotab zone points are {x: longitude, y: latitude}; a point on or

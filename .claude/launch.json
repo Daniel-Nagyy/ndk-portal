@@ -1,12 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    {
-      "name": "ndk-portal",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["server.mjs"],
-      "port": 4173,
-      "url": "https://localhost:4173"
-    }
+    { "name": "ndk-portal", "runtimeExecutable": "node", "runtimeArgs": ["server.mjs"], "port": 4173, "url": "https://localhost:4173" }
   ]
 }

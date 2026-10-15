@@ -6484,6 +6484,26 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
     showToast("Announcement posted.");
   }
 
+// Does this already-stored row describe the same trip as the one being imported?
+//
+// Deliberately does NOT compare dailyDate. dailyDate is derived from the CSV's
+// Stop 1 planned arrival, so when Amazon moves a block even slightly - across
+// midnight is enough - the re-imported row stopped matching, was inserted as a
+// brand new row with blank manual fields, and the dispatcher's truck number and
+// fuel reading appeared to have been wiped. The trip id is unique in Relay, so
+// block + trip identifies the row on its own and survives a reschedule.
+function findExistingRecap(row, incoming, tripleJ) {
+  if (row.clientId !== incoming.clientId) return false;
+
+  // Triple J is grouped per block, so a block id is the whole key.
+  if (tripleJ && incoming.blockId && incoming.blockId !== "Pending Block") {
+    return row.blockId === incoming.blockId;
+  }
+
+  if (!incoming.tripId) return false;
+  return row.blockId === incoming.blockId && row.tripId === incoming.tripId;
+}
+
 async function importTripsCsvFile(file, user) {
   if (!user || user.role === "owner") {
     throw new Error("Only admins and dispatchers can import trips.");
@@ -6519,25 +6539,7 @@ async function importTripsCsvFile(file, user) {
   const appliedRows = [];
 
   importedRows.forEach((incoming) => {
-    const existing = state.recaps.find((row) => {
-      if (row.clientId !== incoming.clientId) {
-        return false;
-      }
-
-      if (
-        tripleJ &&
-        incoming.blockId &&
-        incoming.blockId !== "Pending Block"
-      ) {
-        return row.blockId === incoming.blockId;
-      }
-
-      return (
-        row.dailyDate === incoming.dailyDate &&
-        row.blockId === incoming.blockId &&
-        row.tripId === incoming.tripId
-      );
-    });
+    const existing = state.recaps.find((row) => findExistingRecap(row, incoming, tripleJ));
 
     if (existing) {
       const originalBlockAnchorTime =
@@ -6553,7 +6555,12 @@ async function importTripsCsvFile(file, user) {
           existing.assignedDispatcherId ||
           incoming.assignedDispatcherId,
         dvir: existing.dvir,
-        fuel: existing.fuel,
+        // Truck number and fuel are typed in by dispatch and must never be taken
+        // from the CSV on a re-import. truck was unprotected, so a blank Tractor
+        // Vehicle ID in the export silently cleared a manually entered truck.
+        // Both keep whatever is already on the row; the CSV only fills a blank.
+        truck: existing.truck || incoming.truck,
+        fuel: existing.fuel || incoming.fuel,
         onDuty: existing.onDuty,
         finalArrivalHome: existing.finalArrivalHome,
         driverLogOff: existing.driverLogOff,
