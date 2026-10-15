@@ -2697,12 +2697,19 @@ function renderTopbar(user) {
 
   function visibleRecaps(user) {
     let rows = state.recaps.filter((row) => row.dailyDate === selectedRecapDate);
-    if (user.role === "dispatcher") {
-      rows = rows.filter((row) => row.assignedDispatcherId === user.id || row.assignedDispatcherId === null);
-    }
-    if (user.role === "owner") {
-      rows = rows.filter((row) => row.clientId === user.clientId);
-    }
+    // The daily recap is the ACCOUNT's board, not one dispatcher's. Everyone on an
+    // account sees and edits the same rows, so a second desk or a shift handover
+    // picks up exactly where the last person left off.
+    //
+    // This used to filter dispatchers by assignedDispatcherId. Because the CSV
+    // import stamps that field with the importing dispatcher's id, every row one
+    // dispatcher imported was invisible to all the others — a new dispatcher saw
+    // an empty day. It also meant dispatchers had no account filter at all, so an
+    // unassigned row from another account could show on their board.
+    //
+    // assignedDispatcherId still records who owns a row, and the "mine" filter
+    // below uses it; it just no longer hides the rest of the account's day.
+    rows = rows.filter((row) => canSeeClient(user, row.clientId));
     if (recapFilter === "issues") {
       rows = rows.filter((row) => row.issues || missingRequired(row).length > 0 || row.lateFirstStop);
     }
@@ -2716,12 +2723,12 @@ function renderTopbar(user) {
   }
 
   function visibleShifts(user) {
-    let rows = state.shifts;
+    // Shifts stay per-dispatcher on purpose — a desk assignment belongs to one
+    // person — but they are still scoped to the account first, or an unassigned
+    // shift from another account would show on this dispatcher's board.
+    let rows = state.shifts.filter((row) => canSeeClient(user, row.clientId));
     if (user.role === "dispatcher") {
       rows = rows.filter((row) => row.assignedDispatcherId === user.id || row.assignedDispatcherId === null);
-    }
-    if (user.role === "owner") {
-      rows = rows.filter((row) => row.clientId === user.clientId);
     }
     return applySearch(rows, ["date", "start", "end", "status", "desk", "handoff"]);
   }
