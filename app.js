@@ -1444,8 +1444,13 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   return normalizedName.includes("triplej");
 }
 
+// How long before Stop 1 the driver is due at the yard. Triple J used to be 15;
+// it is now 30, the same as every other account, so this no longer varies.
+// Kept as a function because the Requested Start column, the recompute when a
+// dispatcher edits Stop 1, and the starting message all have to agree — changing
+// the number in one place and not the others is what made them disagree before.
 function recapStartOffsetMinutes(clientId) {
-  return isTripleJClient(clientId) ? 15 : 30;
+  return 30;
 }
 
 function formatTripleJMessageDate(date) {
@@ -5004,8 +5009,11 @@ function makeStartingMessage(row) {
 `
       : "";
 
+  // Same offset as the Requested Start column (30 min before Stop 1). Triple J
+  // recomputes from Stop 1 so the message follows a dispatcher's edit; other
+  // accounts use the stored Requested Start.
   const yardArrivalTime = isTripleJClient(row.clientId)
-    ? subtractMinutes(row.stopOneupcoming, 15) || row.requestedStart || "—"
+    ? subtractMinutes(row.stopOneupcoming, recapStartOffsetMinutes(row.clientId)) || row.requestedStart || "—"
     : row.requestedStart || "—";
 
   return `👋 Hello ${row.driverAssigned || "—"},
