@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { processHosTelegramAlerts, sendTelegramMessage } from "./hos-alerts.mjs";
 import { startPolling, getNetradyneStatus } from './netradyne/poller.js';
 import { getAlerts, updateAlertStatus, pruneToAccounts } from './netradyne/store.js';
+import { blocksFromCsvs } from './trips-import.mjs';
 import { getAuthenticatedContext } from './netradyne/auth.js';
 import { pushConfigured, getVapidPublicKey, removeSubscription, subscriptionCount } from './push.mjs';
 import {
@@ -19,7 +20,7 @@ import {
   listDrivers, getDriverById, upsertDriver, deleteDriver,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey,
-  driverSlotOptions, driverSlotMatches
+  driverSlotOptions, driverSlotMatches, saveDriverShifts, clearDriverShifts
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
 
@@ -705,6 +706,65 @@ const requestHandler = (req, res) => {  // CORS Headers
         sendJson(200, { success: true, account: user.account_id, ...result });
       } catch (error) {
         sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    })();
+    return;
+  }
+
+  // Upload Relay Trips CSVs straight from the Driver Slots page. On a hosted
+  // deployment the exports live on a dispatcher's laptop, not on the server,
+  // so the command-line importer cannot reach them.
+  if (url.pathname === '/api/driver-slots/import' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
+        if (!['superadmin', 'owner', 'manager', 'dispatcher'].includes(authUser.role)) {
+          return sendJson(403, { success: false, error: 'Not allowed to import' });
+        }
+        const accountId = authUser.role === 'superadmin'
+          ? (url.searchParams.get('accountId') || authUser.account_id)
+          : authUser.account_id;
+        if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+
+        // Each export is well under a megabyte; this only stops a runaway body.
+        const MAX_BYTES = 40 * 1024 * 1024;
+        const body = await new Promise((resolve, reject) => {
+          let text = '';
+          let size = 0;
+          req.on('data', (chunk) => {
+            size += chunk.length;
+            if (size > MAX_BYTES) {
+              reject(new Error('Upload too large. Send fewer files at a time.'));
+              req.destroy();
+              return;
+            }
+            text += chunk.toString();
+          });
+          req.on('end', () => { try { resolve(text ? JSON.parse(text) : {}); } catch (e) { reject(e); } });
+          req.on('error', reject);
+        });
+
+        const files = Array.isArray(body.files) ? body.files.filter((f) => f && typeof f.text === 'string') : [];
+        if (!files.length) return sendJson(400, { success: false, error: 'No CSV files received' });
+
+        const { rows, stats } = blocksFromCsvs(files, {
+          accountId,
+          carrier: (body.carrier || '').trim(),
+          since: (body.since || '').trim(),
+        });
+        if (!rows.length) {
+          return sendJson(200, {
+            success: false,
+            error: 'No usable block rows. Every block was unnamed, filtered out by carrier, or had no date.',
+            stats,
+          });
+        }
+        const cleared = body.replace ? clearDriverShifts(accountId) : 0;
+        saveDriverShifts(rows);
+        sendJson(200, { success: true, cleared, stats, ...driverSlotOptions(accountId) });
+      } catch (error) {
+        sendJson(400, { success: false, error: simplifyError(error) });
       }
     })();
     return;

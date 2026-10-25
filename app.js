@@ -1261,7 +1261,10 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   let slotMatches = [];
   let slotLoading = false;
   let slotLoadedOnce = false;
+  let slotImportBusy = false;
+  let slotImportResult = null;
   const slotFilters = { weekday: "", domicile: "", solo: "", slot: "", start: "", driver: "" };
+  let slotImportCarrier = "";
 
   async function loadSlotOptions() {
     try {
@@ -1286,6 +1289,40 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
       slotMatches = [];
     } finally {
       slotLoading = false;
+      render();
+    }
+  }
+
+  // The Trips exports sit on a dispatcher's own machine, so they are uploaded
+  // through the browser rather than copied onto the server.
+  async function importTripsFiles(fileList, { replace = false, carrier = "" } = {}) {
+    const files = [...fileList];
+    if (!files.length) return;
+    slotImportBusy = true;
+    slotImportResult = null;
+    render();
+    try {
+      const payload = await Promise.all(files.map(async (file) => ({ name: file.name, text: await file.text() })));
+      const res = await fetch("/api/driver-slots/import", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: payload, replace, carrier }),
+      });
+      const data = await res.json();
+      slotImportResult = data;
+      if (data.success) {
+        slotOptions = data;
+        showToast(`Imported ${data.stats.imported} block(s).`);
+        await loadSlotMatches();
+      } else {
+        showToast(data.error || "Import failed.");
+      }
+    } catch (e) {
+      slotImportResult = { success: false, error: String(e.message || e) };
+      showToast("Import failed.");
+    } finally {
+      slotImportBusy = false;
       render();
     }
   }
@@ -2368,11 +2405,20 @@ const parsed = parseNetradynePaste(text, clientId);
             <p>${options.shifts ? `${options.shifts} blocks on file${options.first ? `, ${escapeHtml(options.first)} to ${escapeHtml(options.last)}` : ""}.` : "No block history imported yet."}</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
+            <input type="file" accept=".csv" multiple data-slot-upload hidden />
+            <label class="field compact-field" style="margin:0">
+              <span class="field-label">Carrier</span>
+              <input class="table-control" style="width:90px" data-slot-carrier placeholder="all" value="${escapeHtml(slotImportCarrier)}" />
+            </label>
+            <button class="btn btn-primary btn-small" type="button" data-action="slot-import" ${slotImportBusy ? "disabled" : ""}>
+              ${slotImportBusy ? "Importing…" : "Import Trips CSV"}
+            </button>
             <button class="btn btn-secondary btn-small" type="button" data-action="slot-reset">Clear filters</button>
             <span class="pill blue">${escapeHtml(options.account || "")}</span>
           </div>
         </div>
         <div class="panel-body">
+          ${slotImportResult ? renderSlotImportResult(slotImportResult) : ""}
           ${!options.shifts
             ? `<p class="empty-state">No history imported. Run <code>node scripts/import-trips.mjs ${escapeHtml(options.accountId || "<account>")} &lt;folder with Trips CSVs&gt; --carrier TJER</code> on the server.</p>`
             : slotLoading
@@ -2414,6 +2460,20 @@ const parsed = parseNetradynePaste(text, clientId);
           ${renderSlotMobileCards(rows, domiciles)}`}
         </div>
       </div>`;
+  }
+
+  function renderSlotImportResult(result) {
+    if (!result.success) {
+      return `<div class="notice warn"><strong>Import failed.</strong> ${escapeHtml(result.error || "")}
+        ${result.stats && result.stats.carriers ? `<br>Carriers in those files: ${escapeHtml(Object.entries(result.stats.carriers).map(([k, v]) => `${k} (${v})`).join(", "))}` : ""}</div>`;
+    }
+    const s = result.stats;
+    return `<div class="notice ok">
+      <strong>Imported ${s.imported} shift(s)</strong> from ${s.files} file(s)${s.first ? `, ${escapeHtml(s.first)} to ${escapeHtml(s.last)}` : ""}.
+      <br>Domiciles: ${escapeHtml(Object.entries(s.domiciles).map(([k, v]) => `${k} ${v}`).join(", ") || "none")}.
+      Skipped ${s.unnamed} row(s) with no driver name${s.otherCarrier ? `, ${s.otherCarrier} from other carriers` : ""}.
+      ${result.cleared ? `<br>Replaced ${result.cleared} existing shift(s).` : ""}
+    </div>`;
   }
 
   function renderSlotMobileCards(rows, domiciles) {
@@ -6754,6 +6814,11 @@ case "hos-close-filters":
         selectedDisputeWeek = isoAddDays(selectedDisputeWeek, 7);
         render();
         break;
+      case "slot-import": {
+        const picker = document.querySelector("[data-slot-upload]");
+        if (picker) picker.click();
+        return;
+      }
       case "slot-reset":
         for (const key of Object.keys(slotFilters)) slotFilters[key] = "";
         render();
@@ -6839,6 +6904,16 @@ case "hos-close-filters":
   async function handleChange(event) {
     // Don't re-render on login view to avoid clearing form inputs
     if (currentView === "login") return;
+
+    const slotUpload = event.target.closest("[data-slot-upload]");
+    if (slotUpload) {
+      // Copy the list out before clearing the input: resetting value empties
+      // the live FileList, and the upload would silently do nothing.
+      const files = [...slotUpload.files];
+      slotUpload.value = "";
+      importTripsFiles(files, { carrier: slotImportCarrier });
+      return;
+    }
 
     const slotFilter = event.target.closest("[data-slot-filter]");
     if (slotFilter) {
@@ -7071,6 +7146,12 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       disputeSearch = disputeSearchInput.value;
       window.clearTimeout(handleInput.searchTimer);
       handleInput.searchTimer = window.setTimeout(render, 120);
+      return;
+    }
+
+    const slotCarrierInput = event.target.closest("[data-slot-carrier]");
+    if (slotCarrierInput) {
+      slotImportCarrier = slotCarrierInput.value.trim();
       return;
     }
 
