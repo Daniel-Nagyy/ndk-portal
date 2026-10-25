@@ -19,7 +19,7 @@ import {
   listDrivers, getDriverById, upsertDriver, deleteDriver,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey,
-  driverSlotOptions, driverSlotMatches, saveDriverShifts
+  driverSlotOptions, driverSlotMatches, driverSlotHistory, saveDriverShifts
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
 
@@ -790,6 +790,18 @@ const requestHandler = (req, res) => {  // CORS Headers
       driver: url.searchParams.get('driver') || '',
     });
     sendJson(200, { success: true, drivers, start, startSpan });
+    return;
+  }
+
+  // One driver's own shifts, for the panel that opens when a row is clicked.
+  if (url.pathname === '/api/driver-slots/driver' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
+    const accountId = slotAccountFor(authUser, url.searchParams.get('accountId'));
+    if (!accountId) return sendJson(403, { success: false, error: 'Driver Slots is not enabled for this account' });
+    const key = url.searchParams.get('key') || '';
+    if (!key) return sendJson(400, { success: false, error: 'No driver given' });
+    sendJson(200, { success: true, key, shifts: driverSlotHistory(accountId, key) });
     return;
   }
 

@@ -863,6 +863,13 @@ let thresholdNotified = loadNotificationMemory(THRESHOLD_MEMORY_KEY);
 
   app.addEventListener("submit", handleSubmit);
   app.addEventListener("click", handleClick);
+  app.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = event.target.closest("[data-slot-driver]");
+    if (!row) return;
+    event.preventDefault();
+    handleClick(event);
+  });
   app.addEventListener("change", handleChange);
   app.addEventListener("input", handleInput);
 
@@ -1261,6 +1268,20 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   let slotMatches = [];
   let slotLoading = false;
   let slotLoadedOnce = false;
+  let slotOpenDriver = null;          // driver_key whose history is open
+  const slotHistory = new Map();      // driver_key -> shifts, cached per visit
+
+  async function loadSlotHistory(key) {
+    if (slotHistory.has(key)) return;
+    try {
+      const res = await fetch(`/api/driver-slots/driver?key=${encodeURIComponent(key)}`, { credentials: "same-origin" });
+      const data = await res.json();
+      slotHistory.set(key, data.success && Array.isArray(data.shifts) ? data.shifts : []);
+    } catch (e) {
+      slotHistory.set(key, []);
+    }
+    render();
+  }
   const slotFilters = { weekday: "", domicile: "", start: "", startSpan: "120", driver: "" };
 
   // Driver Slots is for Triple J dispatchers only for now. Owners never see it.
@@ -2428,16 +2449,17 @@ const parsed = parseNetradynePaste(text, clientId);
                   <th>Usual start</th>
                   <th>Week</th>
                   <th>Last worked</th>
-                  <th>Tractors</th>
                 </tr>
               </thead>
               <tbody>
                 ${rows
                   .map(
                     (r, i) => `
-                  <tr class="${r.exactStart ? "slot-row-exact" : ""}">
+                  <tr class="slot-row${r.exactStart ? " slot-row-exact" : ""}${r.key === slotOpenDriver ? " slot-row-open" : ""}"
+                      data-slot-driver="${escapeHtml(r.key)}" tabindex="0" role="button"
+                      aria-expanded="${r.key === slotOpenDriver}">
                     <td class="slot-th-rank">${i + 1}</td>
-                    <td class="slot-driver">${escapeHtml(r.driver)}</td>
+                    <td class="slot-driver"><span class="slot-caret">${r.key === slotOpenDriver ? "▾" : "▸"}</span>${escapeHtml(r.driver)}</td>
                     <td class="slot-num slot-strong">${r.shifts}</td>
                     ${domiciles
                       .map((d) => {
@@ -2448,8 +2470,8 @@ const parsed = parseNetradynePaste(text, clientId);
                     <td class="slot-start">${escapeHtml(r.usualStart || "—")} ${slotOffsetLabel(r)}</td>
                     <td>${renderSlotWeek(r.days || {}, slotFilters.weekday)}</td>
                     <td class="slot-muted">${escapeHtml(r.lastWorked || "")}</td>
-                    <td class="slot-muted">${escapeHtml((r.tractors || []).join(" · "))}</td>
-                  </tr>`
+                  </tr>
+                  ${r.key === slotOpenDriver ? renderSlotHistoryRow(r, domiciles.length) : ""}`
                   )
                   .join("")}
               </tbody>
@@ -2460,12 +2482,66 @@ const parsed = parseNetradynePaste(text, clientId);
       </section>`;
   }
 
+  // The driver's own shifts, newest first, grouped by month so a gap in their
+  // work is visible rather than buried in a flat list.
+  function renderSlotHistoryList(driver) {
+    const shifts = slotHistory.get(driver.key);
+    if (!shifts) return `<div class="slot-history"><p class="slot-muted">Loading shifts…</p></div>`;
+    if (!shifts.length) return `<div class="slot-history"><p class="slot-muted">No shifts on file.</p></div>`;
+
+    const months = new Map();
+    for (const shift of shifts) {
+      const month = shift.date.slice(0, 7);
+      if (!months.has(month)) months.set(month, []);
+      months.get(month).push(shift);
+    }
+    const monthName = (ym) => {
+      const [y, m] = ym.split("-");
+      return `${["January","February","March","April","May","June","July","August","September","October","November","December"][Number(m) - 1]} ${y}`;
+    };
+
+    return `
+      <div class="slot-history">
+        <div class="slot-history-head">
+          <strong>${escapeHtml(driver.driver)}</strong>
+          <span class="slot-muted">${shifts.length} most recent shift${shifts.length === 1 ? "" : "s"}</span>
+        </div>
+        ${[...months.entries()]
+          .map(
+            ([month, list]) => `
+          <div class="slot-history-month">
+            <div class="slot-history-month-name">${escapeHtml(monthName(month))} <span class="slot-muted">${list.length}</span></div>
+            <div class="slot-history-items">
+              ${list
+                .map(
+                  (shift) => `
+                <div class="slot-history-item">
+                  <span class="slot-history-day">${SLOT_DAY_NAMES[shift.weekday]}</span>
+                  <span class="slot-history-date">${escapeHtml(shift.date)}</span>
+                  <span class="slot-history-time">${escapeHtml(shift.start || "—")}</span>
+                  <span class="slot-chip slot-chip-sm">${escapeHtml(shift.domicile || "?")}</span>
+                </div>`
+                )
+                .join("")}
+            </div>
+          </div>`
+          )
+          .join("")}
+      </div>`;
+  }
+
+  function renderSlotHistoryRow(driver, domicileCount) {
+    // 6 fixed columns (rank, driver, shifts, usual start, week, last worked)
+    // plus one per domicile.
+    return `<tr class="slot-history-row"><td colspan="${6 + domicileCount}">${renderSlotHistoryList(driver)}</td></tr>`;
+  }
+
   function renderSlotMobileCards(rows, domiciles) {
     return `<div class="slot-cards">
       ${rows
         .map(
           (r) => `
-        <article class="slot-card${r.exactStart ? " slot-row-exact" : ""}">
+        <article class="slot-card${r.exactStart ? " slot-row-exact" : ""}" data-slot-driver="${escapeHtml(r.key)}">
           <div class="slot-card-top">
             <strong>${escapeHtml(r.driver)}</strong>
             <span class="slot-chip">${r.shifts} shift${r.shifts === 1 ? "" : "s"}</span>
@@ -2476,6 +2552,7 @@ const parsed = parseNetradynePaste(text, clientId);
           </div>
           ${renderSlotWeek(r.days || {}, slotFilters.weekday)}
           <div class="slot-muted slot-card-foot">Last worked ${escapeHtml(r.lastWorked || "—")}</div>
+          ${r.key === slotOpenDriver ? renderSlotHistoryList(r) : ""}
         </article>`
         )
         .join("")}
@@ -6556,6 +6633,16 @@ if (document.visibilityState === 'visible') {
   }
 
   async function handleClick(event) {
+    // Clicking a driver opens their own shifts underneath; clicking again closes.
+    const slotRow = event.target.closest("[data-slot-driver]");
+    if (slotRow) {
+      const key = slotRow.getAttribute("data-slot-driver");
+      slotOpenDriver = slotOpenDriver === key ? null : key;
+      render();
+      if (slotOpenDriver) loadSlotHistory(slotOpenDriver);
+      return;
+    }
+
     const copyKeyBtn = event.target.closest("[data-copy-key]");
     if (copyKeyBtn) {
       const key = copyKeyBtn.getAttribute("data-copy-key") || "";
@@ -6813,6 +6900,7 @@ case "hos-close-filters":
       case "slot-reset":
         for (const key of Object.keys(slotFilters)) slotFilters[key] = "";
         slotFilters.startSpan = "120";
+        slotOpenDriver = null;
         render();
         loadSlotMatches();
         return;
@@ -6900,6 +6988,7 @@ case "hos-close-filters":
     const slotFilter = event.target.closest("[data-slot-filter]");
     if (slotFilter) {
       slotFilters[slotFilter.getAttribute("data-slot-filter")] = slotFilter.value;
+      slotOpenDriver = null;
       render();
       loadSlotMatches();
       return;

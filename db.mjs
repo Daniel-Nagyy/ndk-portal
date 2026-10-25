@@ -333,27 +333,19 @@ export function driverSlotMatches(accountId, filters = {}) {
     FROM driver_shifts WHERE @where GROUP BY driver_key, domicile`);
   const starts = query(`SELECT driver_key AS key, start_time AS start, COUNT(*) AS shifts
     FROM driver_shifts WHERE @where GROUP BY driver_key, start_time ORDER BY shifts DESC`);
-  const tractors = query(`SELECT driver_key AS key, tractor, COUNT(*) AS shifts
-    FROM driver_shifts WHERE @where AND tractor <> '' GROUP BY driver_key, tractor ORDER BY shifts DESC`);
-
   // Every weekday for these drivers, ignoring the weekday filter, so the whole
   // week shows next to the day being covered.
   const week = build(true);
   const byDay = db.prepare(`SELECT driver_key AS key, weekday, COUNT(*) AS shifts
     FROM driver_shifts WHERE ${week.clause} GROUP BY driver_key, weekday`).all(...week.args);
 
-  const index = new Map(drivers.map((d) => [d.key, { ...d, domiciles: {}, days: {}, starts: [], tractors: [] }]));
+  const index = new Map(drivers.map((d) => [d.key, { ...d, domiciles: {}, days: {}, starts: [] }]));
   for (const r of byDomicile) if (index.has(r.key)) index.get(r.key).domiciles[r.domicile || "?"] = r.shifts;
   for (const r of byDay) if (index.has(r.key)) index.get(r.key).days[r.weekday] = r.shifts;
   for (const r of starts) {
     const d = index.get(r.key);
     if (d && d.starts.length < 4) d.starts.push({ start: r.start, shifts: r.shifts });
   }
-  for (const r of tractors) {
-    const d = index.get(r.key);
-    if (d && d.tractors.length < 3) d.tractors.push(r.tractor);
-  }
-
   // The driver's own usual start, and how far that sits from the time asked
   // for, so an exact match can be told apart from a two-hour neighbour.
   const rows = [...index.values()].map((d) => {
@@ -370,6 +362,19 @@ export function driverSlotMatches(accountId, filters = {}) {
     rows.sort((a, b) => (a.offsetMinutes ?? 9999) - (b.offsetMinutes ?? 9999) || b.shifts - a.shifts);
   }
   return rows;
+}
+
+// One driver's shifts, newest first, for the detail panel. Same domicile and
+// exclusion rules as the list, so the history cannot show work the dashboard
+// claims does not exist.
+export function driverSlotHistory(accountId, driverKey, limit = 60) {
+  return db
+    .prepare(`SELECT start_date AS date, start_time AS start, weekday, domicile, operator_id AS operator
+      FROM driver_shifts
+      WHERE ${slotBaseWhere()} AND driver_key = ?
+      ORDER BY start_date DESC, start_time DESC
+      LIMIT ?`)
+    .all(...slotBaseArgs(accountId), String(driverKey || "").toLowerCase(), Number(limit) || 60);
 }
 
 export function clearDriverShifts(accountId) {

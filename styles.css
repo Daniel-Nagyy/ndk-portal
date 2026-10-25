@@ -5111,3 +5111,35 @@ textarea.table-control {
   .slot-cards { display: block; }
   .slot-head-meta { align-items: flex-start; }
 }
+
+/* Driver Slots: the panel that opens when a driver is clicked. */
+.slot-row { cursor: pointer; }
+.slot-row:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+.slot-row-open { background: rgba(88, 166, 255, .1); }
+.slot-caret { display: inline-block; width: 14px; color: var(--muted, #8b97a8); font-size: 10px; }
+
+.slot-history-row td { padding: 0; background: rgba(13, 17, 23, .45); }
+.slot-history { padding: 16px 20px 18px; }
+.slot-history-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.slot-history-month { margin-bottom: 14px; }
+.slot-history-month:last-child { margin-bottom: 0; }
+.slot-history-month-name {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted, #8b97a8); font-weight: 600; margin-bottom: 7px;
+}
+.slot-history-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
+.slot-history-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 11px; font-size: 12px;
+  background: var(--panel, #161b22);
+  border: 1px solid rgba(139, 151, 168, .16); border-radius: 7px;
+}
+.slot-history-day {
+  min-width: 30px; font-weight: 700; font-size: 11px;
+  color: #7ee787;
+}
+.slot-history-date { color: var(--muted, #8b97a8); }
+.slot-history-time { font-weight: 600; margin-left: auto; }
+.slot-chip-sm { padding: 1px 7px; font-size: 10px; }
+
+.slot-card .slot-history { padding: 12px 0 0; }
