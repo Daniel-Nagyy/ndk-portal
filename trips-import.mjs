@@ -37,6 +37,20 @@ const toIsoDate = (value) => {
 // 0 = Monday, matching the dashboard.
 const weekdayOf = (iso) => (new Date(`${iso}T12:00:00`).getDay() + 6) % 7;
 
+// Blocks start on the half hour: 07:30, 08:30 and so on. Trip-level exports
+// report the first trip's own time instead, which lands a few minutes either
+// side, so every start is snapped to the nearest half hour. 19:45 becomes
+// 19:30, and 00:10 becomes 23:30 the evening before rather than a time that
+// does not exist.
+export function normalizeStart(value) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+  if (!m) return "";
+  const minutes = Number(m[1]) * 60 + Number(m[2]);
+  const snapped = Math.round((minutes - 30) / 60) * 60 + 30;
+  const wrapped = ((snapped % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${String(Math.floor(wrapped / 60)).padStart(2, "0")}:30`;
+}
+
 // Pull the shift rows out of one or more exports.
 //
 // The slot lives in the Operator ID (TJER_MGE_Solo1_Tractor_21_d1): carrier,
@@ -79,11 +93,13 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
       }
 
       const key = `${operator}|${isoDate}`;
-      const startTime = row["Stop 1 Planned Arrival Time"] || "";
+      const rawStart = row["Stop 1 Planned Arrival Time"] || "";
+      const startTime = normalizeStart(rawStart);
       const existing = seen.get(key);
       if (existing) {
         // Several trips on the same slot-day: the shift starts at the earliest.
-        if (startTime && (!existing.start_time || startTime < existing.start_time)) {
+        if (rawStart && (!existing.start_raw || rawStart < existing.start_raw)) {
+          existing.start_raw = rawStart;
           existing.start_time = startTime;
           existing.origin = row["Stop 1"] || existing.origin;
         }
@@ -104,12 +120,15 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
         weekday: weekdayOf(isoDate),
         start_date: isoDate,
         start_time: startTime,
+        start_raw: rawStart,
         origin: row["Stop 1"] || "",
       });
     }
   }
 
-  const rows = [...seen.values()];
+  // start_raw is only used while picking the earliest trip of a slot-day; it is
+  // not a column, and passing it on would break the insert.
+  const rows = [...seen.values()].map(({ start_raw, ...row }) => row);
   const dates = rows.map((r) => r.start_date).sort();
   const domiciles = {};
   for (const r of rows) domiciles[r.domicile || "?"] = (domiciles[r.domicile || "?"] || 0) + 1;

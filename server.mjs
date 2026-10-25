@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, statSync, readdirSync } from "node:fs";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer as createHttpServer } from "node:http";
 import { readFileSync } from "node:fs";import { extname, join, normalize } from "node:path";
@@ -6,7 +6,6 @@ import dotenv from "dotenv";
 import { processHosTelegramAlerts, sendTelegramMessage } from "./hos-alerts.mjs";
 import { startPolling, getNetradyneStatus } from './netradyne/poller.js';
 import { getAlerts, updateAlertStatus, pruneToAccounts } from './netradyne/store.js';
-import { blocksFromCsvs } from './trips-import.mjs';
 import { getAuthenticatedContext } from './netradyne/auth.js';
 import { pushConfigured, getVapidPublicKey, removeSubscription, subscriptionCount } from './push.mjs';
 import {
@@ -20,7 +19,7 @@ import {
   listDrivers, getDriverById, upsertDriver, deleteDriver,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey,
-  driverSlotOptions, driverSlotMatches, saveDriverShifts, clearDriverShifts
+  driverSlotOptions, driverSlotMatches, saveDriverShifts
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
 
@@ -38,8 +37,36 @@ dotenv.config();
 // Seed superadmin + migrate env account into the DB on first run.
 try { bootstrap(); } catch (e) { console.error('DB bootstrap failed:', e.message || e); }
 
+// Driver Slots history ships with the deploy. The Relay exports live on a
+// dispatcher's laptop, and a hosted container cannot reach them, so the shifts
+// are built locally by scripts/import-trips.mjs and committed as JSON. Loading
+// is keyed on slot and date, so a redeploy refreshes rather than duplicates.
+function seedDriverShifts(baseDir) {
+  const dir = join(baseDir, 'data', 'driver-shifts');
+  if (!existsSync(dir)) return;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const payload = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      if (!rows.length) continue;
+      const accountId = payload.accountId;
+      if (!accountId || !getAccount(accountId)) {
+        console.warn(`Driver Slots seed ${name}: no account "${accountId}" on this deployment, skipped`);
+        continue;
+      }
+      saveDriverShifts(rows.map((r) => ({ ...r, account_id: accountId })));
+      console.log(`Driver Slots: loaded ${rows.length} shift(s) for ${accountId} from ${name}`);
+    } catch (e) {
+      console.warn(`Driver Slots seed ${name} failed:`, e.message || e);
+    }
+  }
+}
+
 const root = process.cwd();
 const port = Number(process.env.PORT || 4173);
+
+try { seedDriverShifts(root); } catch (e) { console.warn('Driver Slots seed failed:', e.message || e); }
 
 // Run plain HTTP when USE_HTTP=1 (behind a TLS-terminating tunnel or cloud host),
 // otherwise HTTPS with the local self-signed cert for LAN/localhost use.
@@ -733,60 +760,6 @@ const requestHandler = (req, res) => {  // CORS Headers
     return slotAccountAllowed(accountId) ? accountId : null;
   };
 
-  // Upload Relay Trips CSVs straight from the Driver Slots page. On a hosted
-  // deployment the exports live on a dispatcher's laptop, not on the server,
-  // so the command-line importer cannot reach them.
-  if (url.pathname === '/api/driver-slots/import' && req.method === 'POST') {
-    (async () => {
-      try {
-        const authUser = getAuthUser(req);
-        if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
-        const accountId = slotAccountFor(authUser, url.searchParams.get('accountId'));
-        if (!accountId) return sendJson(403, { success: false, error: 'Driver Slots is not enabled for this account' });
-
-        // Each export is well under a megabyte; this only stops a runaway body.
-        const MAX_BYTES = 40 * 1024 * 1024;
-        const body = await new Promise((resolve, reject) => {
-          let text = '';
-          let size = 0;
-          req.on('data', (chunk) => {
-            size += chunk.length;
-            if (size > MAX_BYTES) {
-              reject(new Error('Upload too large. Send fewer files at a time.'));
-              req.destroy();
-              return;
-            }
-            text += chunk.toString();
-          });
-          req.on('end', () => { try { resolve(text ? JSON.parse(text) : {}); } catch (e) { reject(e); } });
-          req.on('error', reject);
-        });
-
-        const files = Array.isArray(body.files) ? body.files.filter((f) => f && typeof f.text === 'string') : [];
-        if (!files.length) return sendJson(400, { success: false, error: 'No CSV files received' });
-
-        const { rows, stats } = blocksFromCsvs(files, {
-          accountId,
-          carrier: (body.carrier || '').trim(),
-          since: (body.since || '').trim(),
-        });
-        if (!rows.length) {
-          return sendJson(200, {
-            success: false,
-            error: 'No usable block rows. Every block was unnamed, filtered out by carrier, or had no date.',
-            stats,
-          });
-        }
-        const cleared = body.replace ? clearDriverShifts(accountId) : 0;
-        saveDriverShifts(rows);
-        sendJson(200, { success: true, cleared, stats, ...driverSlotOptions(accountId) });
-      } catch (error) {
-        sendJson(400, { success: false, error: simplifyError(error) });
-      }
-    })();
-    return;
-  }
-
   // ---------- Driver slots (who works which slot) ----------
   // Account-scoped: a dispatcher only ever sees their own account's history.
   // A superadmin may name another account with ?accountId=.
@@ -806,16 +779,17 @@ const requestHandler = (req, res) => {  // CORS Headers
     const accountId = slotAccountFor(authUser, url.searchParams.get('accountId'));
     if (!accountId) return sendJson(403, { success: false, error: 'Driver Slots is not enabled for this account' });
     const weekdayParam = url.searchParams.get('weekday');
+    const spanParam = url.searchParams.get('startSpan');
+    const start = url.searchParams.get('start') || '';
+    const startSpan = spanParam === null || spanParam === '' ? 120 : Number(spanParam);
     const drivers = driverSlotMatches(accountId, {
       weekday: weekdayParam === null || weekdayParam === '' ? '' : Number(weekdayParam),
       domicile: url.searchParams.get('domicile') || '',
-      solo: url.searchParams.get('solo') || '',
-      slot: url.searchParams.get('slot') || '',
-      start: url.searchParams.get('start') || '',
-      tractor: url.searchParams.get('tractor') || '',
+      start,
+      startSpan,
       driver: url.searchParams.get('driver') || '',
     });
-    sendJson(200, { success: true, drivers });
+    sendJson(200, { success: true, drivers, start, startSpan });
     return;
   }
 

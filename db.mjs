@@ -234,21 +234,49 @@ export function saveDriverShifts(rows) {
   return rows.length;
 }
 
+// Only these two domiciles are run from here, so anything else in an export is
+// another carrier's work and is kept out of the dashboard entirely.
+export const DRIVER_SLOT_DOMICILES = ["MGE", "CLT"];
+
+// Yard drivers open other people's tours, which lands them on dozens of slots
+// they do not actually run. Listing them as a candidate for every slot is
+// noise, so they are left out.
+export const DRIVER_SLOT_EXCLUDED = ["kenno clark"];
+
+const slotBaseWhere = () =>
+  `account_id = ? AND domicile IN (${DRIVER_SLOT_DOMICILES.map(() => "?").join(",")})` +
+  ` AND driver_key NOT IN (${DRIVER_SLOT_EXCLUDED.map(() => "?").join(",")})`;
+const slotBaseArgs = (accountId) => [accountId, ...DRIVER_SLOT_DOMICILES, ...DRIVER_SLOT_EXCLUDED];
+
+// Blocks start on the half hour, so that is the only shape a start filter takes.
+export const SLOT_START_TIMES = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:30`);
+
+const startMinutes = (value) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || ""));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+// Clock distance in minutes, the short way round, so 23:30 is one hour from 00:30.
+export function startDistance(a, b) {
+  const x = startMinutes(a);
+  const y = startMinutes(b);
+  if (x === null || y === null) return null;
+  const raw = Math.abs(x - y) % (24 * 60);
+  return Math.min(raw, 24 * 60 - raw);
+}
+
 // The values the dashboard's filters offer, taken from what was actually imported.
 export function driverSlotOptions(accountId) {
-  const pick = (column) => db
-    .prepare(`SELECT DISTINCT ${column} AS v FROM driver_shifts WHERE account_id = ? AND ${column} IS NOT NULL AND ${column} <> '' ORDER BY v`)
-    .all(accountId)
-    .map((r) => r.v);
   const range = db
-    .prepare("SELECT MIN(start_date) AS first, MAX(start_date) AS last, COUNT(*) AS shifts FROM driver_shifts WHERE account_id = ?")
-    .get(accountId) || {};
+    .prepare(`SELECT MIN(start_date) AS first, MAX(start_date) AS last, COUNT(*) AS shifts
+      FROM driver_shifts WHERE ${slotBaseWhere()}`)
+    .get(...slotBaseArgs(accountId)) || {};
+  const domiciles = db
+    .prepare(`SELECT DISTINCT domicile AS v FROM driver_shifts WHERE ${slotBaseWhere()} ORDER BY v`)
+    .all(...slotBaseArgs(accountId))
+    .map((r) => r.v);
   return {
-    domiciles: pick("domicile"),
-    solos: pick("solo"),
-    slots: pick("shift_slot"),
-    starts: pick("start_time"),
-    tractors: pick("tractor"),
+    domiciles,
+    starts: SLOT_START_TIMES,
     first: range.first || null,
     last: range.last || null,
     shifts: range.shifts || 0,
@@ -258,50 +286,65 @@ export function driverSlotOptions(accountId) {
 // Drivers who have worked the chosen slot, most often first. `weekday` is
 // 0=Monday. Every filter is optional, so an empty filter answers "who works
 // this slot at all".
+//
+// A start time matches anything within `startSpan` minutes of it either way
+// (two hours by default), because a dispatcher filling 08:30 wants to see the
+// 07:30 and 09:30 drivers too. The window is turned into a list of the exact
+// times present in the data, which keeps the wrap around midnight correct.
 export function driverSlotMatches(accountId, filters = {}) {
-  const where = ["account_id = ?"];
-  const args = [accountId];
-  const add = (sql, value) => {
-    if (value === undefined || value === null || value === "") return;
-    where.push(sql);
-    args.push(value);
-  };
-  add("weekday = ?", filters.weekday);
-  add("domicile = ?", filters.domicile);
-  add("solo = ?", filters.solo);
-  add("shift_slot = ?", filters.slot);
-  add("start_time = ?", filters.start);
-  add("tractor = ?", filters.tractor);
-  if (filters.driver) {
-    where.push("driver_key LIKE ?");
-    args.push(`%${String(filters.driver).toLowerCase()}%`);
+  // Conditions are kept as clause/args pairs so one can be dropped later
+  // without the arguments falling out of step with the SQL.
+  const parts = [{ sql: slotBaseWhere(), args: slotBaseArgs(accountId) }];
+  const add = (sql, ...args) => parts.push({ sql, args });
+
+  const hasWeekday = filters.weekday !== undefined && filters.weekday !== null && filters.weekday !== "";
+  if (hasWeekday) add("weekday = ?", Number(filters.weekday));
+  if (filters.domicile) add("domicile = ?", filters.domicile);
+  if (filters.driver) add("driver_key LIKE ?", `%${String(filters.driver).toLowerCase()}%`);
+
+  const span = filters.startSpan === undefined ? 120 : Number(filters.startSpan);
+  if (filters.start) {
+    const present = db
+      .prepare(`SELECT DISTINCT start_time AS v FROM driver_shifts WHERE ${slotBaseWhere()} AND start_time <> ''`)
+      .all(...slotBaseArgs(accountId))
+      .map((r) => r.v);
+    const within = present.filter((t) => {
+      const d = startDistance(t, filters.start);
+      return d !== null && d <= span;
+    });
+    if (!within.length) return [];
+    add(`start_time IN (${within.map(() => "?").join(",")})`, ...within);
   }
-  const clause = where.join(" AND ");
 
-  const drivers = db.prepare(`SELECT driver_key AS key, MAX(driver) AS driver, COUNT(*) AS shifts,
+  const build = (skipWeekday) => {
+    const used = skipWeekday ? parts.filter((p) => p.sql !== "weekday = ?") : parts;
+    return { clause: used.map((p) => p.sql).join(" AND "), args: used.flatMap((p) => p.args) };
+  };
+  const main = build(false);
+  const query = (sql) => db.prepare(sql.replace("@where", main.clause)).all(...main.args);
+
+  const drivers = query(`SELECT driver_key AS key, MAX(driver) AS driver, COUNT(*) AS shifts,
       MIN(start_date) AS firstWorked, MAX(start_date) AS lastWorked
-    FROM driver_shifts WHERE ${clause}
-    GROUP BY driver_key ORDER BY shifts DESC, lastWorked DESC`).all(...args);
+    FROM driver_shifts WHERE @where
+    GROUP BY driver_key ORDER BY shifts DESC, lastWorked DESC`);
 
-  // Per-domicile counts for the same filter, so the table can show a column
-  // per domicile (MGE, CLT, anything else that turns up) instead of hard-coding.
-  const byDomicile = db.prepare(`SELECT driver_key AS key, domicile, COUNT(*) AS shifts
-    FROM driver_shifts WHERE ${clause} GROUP BY driver_key, domicile`).all(...args);
-  const starts = db.prepare(`SELECT driver_key AS key, start_time AS start, COUNT(*) AS shifts
-    FROM driver_shifts WHERE ${clause} GROUP BY driver_key, start_time ORDER BY shifts DESC`).all(...args);
-  const tractors = db.prepare(`SELECT driver_key AS key, tractor, COUNT(*) AS shifts
-    FROM driver_shifts WHERE ${clause} AND tractor <> '' GROUP BY driver_key, tractor ORDER BY shifts DESC`).all(...args);
+  // One column per domicile, so CLT sits beside MGE.
+  const byDomicile = query(`SELECT driver_key AS key, domicile, COUNT(*) AS shifts
+    FROM driver_shifts WHERE @where GROUP BY driver_key, domicile`);
+  const starts = query(`SELECT driver_key AS key, start_time AS start, COUNT(*) AS shifts
+    FROM driver_shifts WHERE @where GROUP BY driver_key, start_time ORDER BY shifts DESC`);
+  const tractors = query(`SELECT driver_key AS key, tractor, COUNT(*) AS shifts
+    FROM driver_shifts WHERE @where AND tractor <> '' GROUP BY driver_key, tractor ORDER BY shifts DESC`);
 
-  // Every weekday for these drivers regardless of the weekday filter, so the
-  // dashboard can show the rest of their week next to the day being filled.
-  const dayArgs = args.filter((_, i) => where[i] !== "weekday = ?");
-  const dayClause = where.filter((w) => w !== "weekday = ?").join(" AND ");
+  // Every weekday for these drivers, ignoring the weekday filter, so the whole
+  // week shows next to the day being covered.
+  const week = build(true);
   const byDay = db.prepare(`SELECT driver_key AS key, weekday, COUNT(*) AS shifts
-    FROM driver_shifts WHERE ${dayClause} GROUP BY driver_key, weekday`).all(...dayArgs);
+    FROM driver_shifts WHERE ${week.clause} GROUP BY driver_key, weekday`).all(...week.args);
 
   const index = new Map(drivers.map((d) => [d.key, { ...d, domiciles: {}, days: {}, starts: [], tractors: [] }]));
-  for (const r of byDomicile) index.get(r.key) && (index.get(r.key).domiciles[r.domicile || "?"] = r.shifts);
-  for (const r of byDay) index.get(r.key) && (index.get(r.key).days[r.weekday] = r.shifts);
+  for (const r of byDomicile) if (index.has(r.key)) index.get(r.key).domiciles[r.domicile || "?"] = r.shifts;
+  for (const r of byDay) if (index.has(r.key)) index.get(r.key).days[r.weekday] = r.shifts;
   for (const r of starts) {
     const d = index.get(r.key);
     if (d && d.starts.length < 4) d.starts.push({ start: r.start, shifts: r.shifts });
@@ -310,7 +353,23 @@ export function driverSlotMatches(accountId, filters = {}) {
     const d = index.get(r.key);
     if (d && d.tractors.length < 3) d.tractors.push(r.tractor);
   }
-  return [...index.values()];
+
+  // The driver's own usual start, and how far that sits from the time asked
+  // for, so an exact match can be told apart from a two-hour neighbour.
+  const rows = [...index.values()].map((d) => {
+    const usualStart = d.starts.length ? d.starts[0].start : null;
+    return {
+      ...d,
+      usualStart,
+      offsetMinutes: filters.start && usualStart ? startDistance(usualStart, filters.start) : null,
+      exactStart: filters.start && usualStart ? usualStart === filters.start : null,
+    };
+  });
+  // Exact matches first when a time was asked for, then the most experienced.
+  if (filters.start) {
+    rows.sort((a, b) => (a.offsetMinutes ?? 9999) - (b.offsetMinutes ?? 9999) || b.shifts - a.shifts);
+  }
+  return rows;
 }
 
 export function clearDriverShifts(accountId) {
