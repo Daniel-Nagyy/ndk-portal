@@ -1261,10 +1261,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   let slotMatches = [];
   let slotLoading = false;
   let slotLoadedOnce = false;
-  let slotImportBusy = false;
-  let slotImportResult = null;
-  const slotFilters = { weekday: "", domicile: "", solo: "", slot: "", start: "", driver: "" };
-  let slotImportCarrier = "";
+  const slotFilters = { weekday: "", domicile: "", start: "", startSpan: "120", driver: "" };
 
   // Driver Slots is for Triple J dispatchers only for now. Owners never see it.
   // The server enforces this too; this only keeps it out of the menu.
@@ -1302,40 +1299,6 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
       slotMatches = [];
     } finally {
       slotLoading = false;
-      render();
-    }
-  }
-
-  // The Trips exports sit on a dispatcher's own machine, so they are uploaded
-  // through the browser rather than copied onto the server.
-  async function importTripsFiles(fileList, { replace = false, carrier = "" } = {}) {
-    const files = [...fileList];
-    if (!files.length) return;
-    slotImportBusy = true;
-    slotImportResult = null;
-    render();
-    try {
-      const payload = await Promise.all(files.map(async (file) => ({ name: file.name, text: await file.text() })));
-      const res = await fetch("/api/driver-slots/import", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: payload, replace, carrier }),
-      });
-      const data = await res.json();
-      slotImportResult = data;
-      if (data.success) {
-        slotOptions = data;
-        showToast(`Imported ${data.stats.imported} block(s).`);
-        await loadSlotMatches();
-      } else {
-        showToast(data.error || "Import failed.");
-      }
-    } catch (e) {
-      slotImportResult = { success: false, error: String(e.message || e) };
-      showToast("Import failed.");
-    } finally {
-      slotImportBusy = false;
       render();
     }
   }
@@ -2330,15 +2293,20 @@ const parsed = parseNetradynePaste(text, clientId);
 
 
   // ---------- Driver Slots ----------
-  // Pick a day and a slot; see who has worked it, most often first. The point
-  // is covering a call-off: the driver at the top of the list is the one who
-  // already knows this run.
+  // Pick a day and a block start; see who has worked it. Blocks start on the
+  // half hour, and a search also brings back the two hours either side, since
+  // a dispatcher filling 08:30 still wants to know who runs 07:30 and 09:30.
   const SLOT_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-  const SLOT_DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const SLOT_DAYS_SHORT = ["M", "T", "W", "T", "F", "S", "S"];
+  const SLOT_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const SLOT_SPANS = [
+    { value: 0, label: "Exact time only" },
+    { value: 60, label: "± 1 hour" },
+    { value: 120, label: "± 2 hours" },
+    { value: 180, label: "± 3 hours" },
+  ];
 
   function slotDomicileColumns() {
-    // A column per domicile that exists in the data, so CLT sits beside MGE
-    // without either being hard-coded.
     const known = (slotOptions && slotOptions.domiciles) || [];
     if (known.length) return known;
     const seen = new Set();
@@ -2346,158 +2314,171 @@ const parsed = parseNetradynePaste(text, clientId);
     return [...seen].sort();
   }
 
-  function slotFilterSummary() {
-    const bits = [];
-    if (slotFilters.weekday !== "") bits.push(SLOT_DAYS[Number(slotFilters.weekday)]);
-    if (slotFilters.domicile) bits.push(slotFilters.domicile);
-    if (slotFilters.solo) bits.push(slotFilters.solo);
-    if (slotFilters.slot) bits.push(slotFilters.slot);
-    if (slotFilters.start) bits.push(`starts ${slotFilters.start}`);
-    return bits.length ? bits.join(" · ") : "every slot";
+  function slotOffsetLabel(driver) {
+    if (driver.offsetMinutes === null || driver.offsetMinutes === undefined) return "";
+    if (driver.offsetMinutes === 0) return `<span class="slot-pill slot-pill-exact">exact</span>`;
+    const hours = driver.offsetMinutes / 60;
+    const text = hours >= 1 ? `${hours % 1 === 0 ? hours : hours.toFixed(1)}h` : `${driver.offsetMinutes}m`;
+    return `<span class="slot-pill slot-pill-near">±${text}</span>`;
   }
 
-  function renderSlotWeekStrip(days) {
-    return SLOT_DAYS_SHORT
-      .map((name, i) => {
-        const count = days[i] || days[String(i)] || 0;
-        const on = count > 0;
-        const selected = slotFilters.weekday !== "" && Number(slotFilters.weekday) === i;
-        return `<span class="slot-day ${on ? "on" : "off"}${selected ? " sel" : ""}" title="${name}: ${count} shift(s)">${name.charAt(0)}</span>`;
+  // The week at a glance. Each day is shaded by how much of that driver's work
+  // falls on it, so a glance says "works Tue to Sat" without reading numbers.
+  function renderSlotWeek(days, selectedWeekday) {
+    const counts = SLOT_DAYS_SHORT.map((_, i) => days[i] || days[String(i)] || 0);
+    const busiest = Math.max(1, ...counts);
+    return `<div class="slot-week">${counts
+      .map((count, i) => {
+        const share = count / busiest;
+        const level = count === 0 ? 0 : share >= 0.75 ? 3 : share >= 0.4 ? 2 : 1;
+        const selected = selectedWeekday !== "" && Number(selectedWeekday) === i;
+        return `<span class="slot-day lvl${level}${selected ? " sel" : ""}"
+          title="${SLOT_DAY_NAMES[i]}: ${count} shift${count === 1 ? "" : "s"}">${SLOT_DAYS_SHORT[i]}</span>`;
       })
-      .join("");
+      .join("")}</div>`;
+  }
+
+  function slotFilterSummary() {
+    const bits = [];
+    bits.push(slotFilters.weekday === "" ? "Any day" : SLOT_DAYS[Number(slotFilters.weekday)]);
+    if (slotFilters.domicile) bits.push(slotFilters.domicile);
+    if (slotFilters.start) {
+      const span = Number(slotFilters.startSpan);
+      bits.push(span ? `${slotFilters.start} ±${span / 60}h` : `${slotFilters.start} exactly`);
+    }
+    if (slotFilters.driver) bits.push(`“${slotFilters.driver}”`);
+    return bits.join(" · ");
   }
 
   function renderDriverSlotsPage(user) {
-    // First visit: fetch after this paint so the page appears straight away.
     if (!slotLoadedOnce && !slotLoading) {
       slotLoadedOnce = true;
       window.setTimeout(loadSlotMatches, 0);
       if (!slotOptions) loadSlotOptions().then(render);
     }
-    const options = slotOptions || { domiciles: [], solos: [], slots: [], starts: [], shifts: 0 };
+    const options = slotOptions || { domiciles: [], starts: [], shifts: 0 };
     const domiciles = slotDomicileColumns();
-    const select = (key, label, values, formatter) => `
-      <label class="field compact-field">
-        <span class="field-label">${escapeHtml(label)}</span>
-        <select class="table-control" data-slot-filter="${key}">
-          <option value="">Any</option>
-          ${values.map((v) => `<option value="${escapeHtml(String(v))}"${String(slotFilters[key]) === String(v) ? " selected" : ""}>${escapeHtml(formatter ? formatter(v) : String(v))}</option>`).join("")}
-        </select>
-      </label>`;
-
     const rows = slotMatches;
     const totalShifts = rows.reduce((sum, r) => sum + r.shifts, 0);
 
+    const field = (label, inner) => `
+      <div class="slot-field">
+        <label class="slot-label">${escapeHtml(label)}</label>
+        ${inner}
+      </div>`;
+    const select = (key, values, formatter, anyLabel) => `
+      <select class="slot-input" data-slot-filter="${key}">
+        ${anyLabel ? `<option value="">${escapeHtml(anyLabel)}</option>` : ""}
+        ${values
+          .map((v) => {
+            const value = typeof v === "object" ? v.value : v;
+            const text = typeof v === "object" ? v.label : formatter ? formatter(v) : String(v);
+            return `<option value="${escapeHtml(String(value))}"${String(slotFilters[key]) === String(value) ? " selected" : ""}>${escapeHtml(text)}</option>`;
+          })
+          .join("")}
+      </select>`;
+
     return `
-      <section class="page-head">
-        <div>
-          <h2>Driver Slots</h2>
-          <p>Who has worked a slot before, so a call-off goes to someone who already knows the run.</p>
-        </div>
-      </section>
-
-      <div class="toolbar">
-        ${select("weekday", "📅 Day", [0, 1, 2, 3, 4, 5, 6], (v) => SLOT_DAYS[v])}
-        ${select("domicile", "🏢 Domicile", options.domiciles)}
-        ${select("solo", "🚚 Solo", options.solos)}
-        ${select("slot", "🔁 Slot", options.slots)}
-        ${select("start", "⏰ Start", options.starts)}
-        <label class="field compact-field" style="flex:1;min-width:160px">
-          <span class="field-label">🔎 Driver</span>
-          <input class="table-control" type="search" data-slot-search placeholder="Driver name…" value="${escapeHtml(slotFilters.driver)}" />
-        </label>
-        <div class="day-meta">
-          <span>${rows.length} driver(s), ${totalShifts} shift(s)</span>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-header">
+      <section class="slot-page">
+        <header class="slot-head">
           <div>
+            <h2>Driver Slots</h2>
+            <p>Who has worked a block before, so a call-off goes to someone who already knows the run.</p>
+          </div>
+          <div class="slot-head-meta">
+            <span class="slot-chip">${escapeHtml(options.account || "")}</span>
+            ${options.shifts
+              ? `<span class="slot-muted">${options.shifts} shifts · ${escapeHtml(options.first || "")} to ${escapeHtml(options.last || "")}</span>`
+              : `<span class="slot-muted">no history loaded</span>`}
+          </div>
+        </header>
+
+        <section class="slot-filters">
+          ${field("Day", select("weekday", [0, 1, 2, 3, 4, 5, 6], (v) => SLOT_DAYS[v], "Any day"))}
+          ${field("Domicile", select("domicile", options.domiciles, null, "MGE and CLT"))}
+          ${field("Block start", select("start", options.starts, null, "Any time"))}
+          ${field("Window", select("startSpan", SLOT_SPANS))}
+          ${field("Driver", `<input class="slot-input" type="search" data-slot-search placeholder="Search a name…" value="${escapeHtml(slotFilters.driver)}" />`)}
+          <div class="slot-field slot-field-actions">
+            <button class="slot-btn" type="button" data-action="slot-reset">Clear</button>
+          </div>
+        </section>
+
+        <section class="slot-results">
+          <div class="slot-results-head">
             <h3>${escapeHtml(slotFilterSummary())}</h3>
-            <p>${options.shifts ? `${options.shifts} blocks on file${options.first ? `, ${escapeHtml(options.first)} to ${escapeHtml(options.last)}` : ""}.` : "No block history imported yet."}</p>
+            <span class="slot-muted">${rows.length} driver${rows.length === 1 ? "" : "s"} · ${totalShifts} shift${totalShifts === 1 ? "" : "s"}</span>
           </div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input type="file" accept=".csv" multiple data-slot-upload hidden />
-            <label class="field compact-field" style="margin:0">
-              <span class="field-label">Carrier</span>
-              <input class="table-control" style="width:90px" data-slot-carrier placeholder="all" value="${escapeHtml(slotImportCarrier)}" />
-            </label>
-            <button class="btn btn-primary btn-small" type="button" data-action="slot-import" ${slotImportBusy ? "disabled" : ""}>
-              ${slotImportBusy ? "Importing…" : "Import Trips CSV"}
-            </button>
-            <button class="btn btn-secondary btn-small" type="button" data-action="slot-reset">Clear filters</button>
-            <span class="pill blue">${escapeHtml(options.account || "")}</span>
-          </div>
-        </div>
-        <div class="panel-body">
-          ${slotImportResult ? renderSlotImportResult(slotImportResult) : ""}
+
           ${!options.shifts
-            ? `<p class="empty-state">No history imported. Run <code>node scripts/import-trips.mjs ${escapeHtml(options.accountId || "<account>")} &lt;folder with Trips CSVs&gt; --carrier TJER</code> on the server.</p>`
+            ? `<p class="slot-empty">No shift history has been loaded for this account yet.</p>`
             : slotLoading
-              ? `<p class="empty-state">Loading…</p>`
+              ? `<p class="slot-empty">Loading…</p>`
               : !rows.length
-                ? `<p class="empty-state">Nobody has worked ${escapeHtml(slotFilterSummary())}. Try widening the filters — some combinations never happen, for example d1 only runs Monday to Thursday.</p>`
+                ? `<p class="slot-empty">Nobody has worked ${escapeHtml(slotFilterSummary())}. Widen the window, or clear the day.</p>`
                 : `
-          <div class="recap-table-desktop">
-            <table class="data-table slot-table">
+          <div class="slot-table-wrap">
+            <table class="slot-table">
               <thead>
                 <tr>
-                  <th>#</th>
+                  <th class="slot-th-rank">#</th>
                   <th>Driver</th>
-                  <th class="col-num">Shifts</th>
-                  ${domiciles.map((d) => `<th class="col-num">${escapeHtml(d)}</th>`).join("")}
+                  <th class="slot-num">Shifts</th>
+                  ${domiciles.map((d) => `<th class="slot-num">${escapeHtml(d)}</th>`).join("")}
                   <th>Usual start</th>
-                  <th>Their week</th>
+                  <th>Week</th>
                   <th>Last worked</th>
                   <th>Tractors</th>
                 </tr>
               </thead>
               <tbody>
-                ${rows.map((r, i) => `
-                  <tr>
-                    <td class="col-num">${i + 1}</td>
-                    <td class="col-driver"><strong>${escapeHtml(r.driver)}</strong></td>
-                    <td class="col-num">${r.shifts}</td>
-                    ${domiciles.map((d) => `<td class="col-num">${(r.domiciles && r.domiciles[d]) || ""}</td>`).join("")}
-                    <td>${r.starts && r.starts.length
-                        ? `${escapeHtml(r.starts[0].start)} <span class="muted">${Math.round((r.starts[0].shifts / r.shifts) * 100)}%</span>`
-                        : ""}</td>
-                    <td class="slot-week">${renderSlotWeekStrip(r.days || {})}</td>
-                    <td>${escapeHtml(r.lastWorked || "")}</td>
-                    <td class="muted">${escapeHtml((r.tractors || []).join(" "))}</td>
-                  </tr>`).join("")}
+                ${rows
+                  .map(
+                    (r, i) => `
+                  <tr class="${r.exactStart ? "slot-row-exact" : ""}">
+                    <td class="slot-th-rank">${i + 1}</td>
+                    <td class="slot-driver">${escapeHtml(r.driver)}</td>
+                    <td class="slot-num slot-strong">${r.shifts}</td>
+                    ${domiciles
+                      .map((d) => {
+                        const n = (r.domiciles && r.domiciles[d]) || 0;
+                        return `<td class="slot-num${n ? "" : " slot-zero"}">${n || "–"}</td>`;
+                      })
+                      .join("")}
+                    <td class="slot-start">${escapeHtml(r.usualStart || "—")} ${slotOffsetLabel(r)}</td>
+                    <td>${renderSlotWeek(r.days || {}, slotFilters.weekday)}</td>
+                    <td class="slot-muted">${escapeHtml(r.lastWorked || "")}</td>
+                    <td class="slot-muted">${escapeHtml((r.tractors || []).join(" · "))}</td>
+                  </tr>`
+                  )
+                  .join("")}
               </tbody>
             </table>
           </div>
           ${renderSlotMobileCards(rows, domiciles)}`}
-        </div>
-      </div>`;
-  }
-
-  function renderSlotImportResult(result) {
-    if (!result.success) {
-      return `<div class="notice warn"><strong>Import failed.</strong> ${escapeHtml(result.error || "")}
-        ${result.stats && result.stats.carriers ? `<br>Carriers in those files: ${escapeHtml(Object.entries(result.stats.carriers).map(([k, v]) => `${k} (${v})`).join(", "))}` : ""}</div>`;
-    }
-    const s = result.stats;
-    return `<div class="notice ok">
-      <strong>Imported ${s.imported} shift(s)</strong> from ${s.files} file(s)${s.first ? `, ${escapeHtml(s.first)} to ${escapeHtml(s.last)}` : ""}.
-      <br>Domiciles: ${escapeHtml(Object.entries(s.domiciles).map(([k, v]) => `${k} ${v}`).join(", ") || "none")}.
-      Skipped ${s.unnamed} row(s) with no driver name${s.otherCarrier ? `, ${s.otherCarrier} from other carriers` : ""}.
-      ${result.cleared ? `<br>Replaced ${result.cleared} existing shift(s).` : ""}
-    </div>`;
+        </section>
+      </section>`;
   }
 
   function renderSlotMobileCards(rows, domiciles) {
-    return `<div class="mobile-cards slot-cards">
-      ${rows.map((r) => `
-        <article class="mobile-card">
-          <header><strong>${escapeHtml(r.driver)}</strong><span class="pill green">${r.shifts} shift(s)</span></header>
-          <p>${domiciles.map((d) => `${escapeHtml(d)} ${(r.domiciles && r.domiciles[d]) || 0}`).join(" · ")}</p>
-          <p>Usual start ${r.starts && r.starts.length ? escapeHtml(r.starts[0].start) : "—"} · last ${escapeHtml(r.lastWorked || "—")}</p>
-          <p class="slot-week">${renderSlotWeekStrip(r.days || {})}</p>
-        </article>`).join("")}
+    return `<div class="slot-cards">
+      ${rows
+        .map(
+          (r) => `
+        <article class="slot-card${r.exactStart ? " slot-row-exact" : ""}">
+          <div class="slot-card-top">
+            <strong>${escapeHtml(r.driver)}</strong>
+            <span class="slot-chip">${r.shifts} shift${r.shifts === 1 ? "" : "s"}</span>
+          </div>
+          <div class="slot-card-row">
+            <span>${escapeHtml(r.usualStart || "—")} ${slotOffsetLabel(r)}</span>
+            <span class="slot-muted">${domiciles.map((d) => `${escapeHtml(d)} ${(r.domiciles && r.domiciles[d]) || 0}`).join(" · ")}</span>
+          </div>
+          ${renderSlotWeek(r.days || {}, slotFilters.weekday)}
+          <div class="slot-muted slot-card-foot">Last worked ${escapeHtml(r.lastWorked || "—")}</div>
+        </article>`
+        )
+        .join("")}
     </div>`;
   }
 
@@ -6829,13 +6810,9 @@ case "hos-close-filters":
         selectedDisputeWeek = isoAddDays(selectedDisputeWeek, 7);
         render();
         break;
-      case "slot-import": {
-        const picker = document.querySelector("[data-slot-upload]");
-        if (picker) picker.click();
-        return;
-      }
       case "slot-reset":
         for (const key of Object.keys(slotFilters)) slotFilters[key] = "";
+        slotFilters.startSpan = "120";
         render();
         loadSlotMatches();
         return;
@@ -6919,16 +6896,6 @@ case "hos-close-filters":
   async function handleChange(event) {
     // Don't re-render on login view to avoid clearing form inputs
     if (currentView === "login") return;
-
-    const slotUpload = event.target.closest("[data-slot-upload]");
-    if (slotUpload) {
-      // Copy the list out before clearing the input: resetting value empties
-      // the live FileList, and the upload would silently do nothing.
-      const files = [...slotUpload.files];
-      slotUpload.value = "";
-      importTripsFiles(files, { carrier: slotImportCarrier });
-      return;
-    }
 
     const slotFilter = event.target.closest("[data-slot-filter]");
     if (slotFilter) {
@@ -7161,12 +7128,6 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       disputeSearch = disputeSearchInput.value;
       window.clearTimeout(handleInput.searchTimer);
       handleInput.searchTimer = window.setTimeout(render, 120);
-      return;
-    }
-
-    const slotCarrierInput = event.target.closest("[data-slot-carrier]");
-    if (slotCarrierInput) {
-      slotImportCarrier = slotCarrierInput.value.trim();
       return;
     }
 

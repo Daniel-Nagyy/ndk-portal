@@ -5003,26 +5003,111 @@ textarea.table-control {
 /* HOS desktop: separate the "X of Y drivers" meta row from the filters above it. */
 .hos-controls-meta { margin-top: 10px; }
 
-
-
 /* ---- Driver Slots ---- */
-.slot-week { white-space: nowrap; }
-.slot-day {
-  display: inline-block;
-  width: 18px;
-  text-align: center;
-  font-size: 11px;
-  line-height: 18px;
-  border-radius: 4px;
-  margin-right: 2px;
-  background: #eceff3;
-  color: #9aa5b1;
-}
-.slot-day.on { background: #d7f0df; color: #1a7f37; font-weight: 600; }
-.slot-day.sel { outline: 2px solid #1f6feb; outline-offset: -2px; }
-.slot-table .col-num { text-align: right; }
-.slot-table .muted { color: #8b97a8; }
+.slot-page { display: flex; flex-direction: column; gap: 20px; padding: 4px 0 40px; }
 
-.notice { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; line-height: 1.5; }
-.notice.ok { background: rgba(26, 127, 55, .12); border: 1px solid rgba(26, 127, 55, .5); }
-.notice.warn { background: rgba(180, 35, 24, .12); border: 1px solid rgba(180, 35, 24, .5); }
+.slot-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+.slot-head h2 { margin: 0 0 6px; font-size: 22px; }
+.slot-head p { margin: 0; color: var(--muted, #8b97a8); font-size: 13px; max-width: 60ch; }
+.slot-head-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+.slot-muted { color: var(--muted, #8b97a8); font-size: 12px; }
+.slot-chip {
+  display: inline-block; padding: 3px 10px; border-radius: 999px;
+  background: rgba(31, 111, 235, .14); color: #58a6ff; font-size: 12px; font-weight: 600;
+}
+
+.slot-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px 16px;
+  align-items: end;
+  padding: 18px 20px;
+  background: var(--panel, #161b22);
+  border: 1px solid var(--line, #2b3444);
+  border-radius: 12px;
+}
+.slot-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.slot-field-actions { justify-content: flex-end; }
+.slot-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted, #8b97a8); font-weight: 600;
+}
+.slot-input {
+  width: 100%; padding: 9px 11px; font-size: 14px; font-family: inherit;
+  color: inherit; background: var(--bg, #0d1117);
+  border: 1px solid var(--line, #2b3444); border-radius: 8px;
+}
+.slot-input:focus { outline: 2px solid #1f6feb; outline-offset: -1px; }
+.slot-btn {
+  padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  color: inherit; background: transparent;
+  border: 1px solid var(--line, #2b3444); border-radius: 8px;
+}
+.slot-btn:hover { border-color: #1f6feb; color: #58a6ff; }
+
+.slot-results {
+  background: var(--panel, #161b22);
+  border: 1px solid var(--line, #2b3444);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.slot-results-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 16px; flex-wrap: wrap;
+  padding: 16px 20px; border-bottom: 1px solid var(--line, #2b3444);
+}
+.slot-results-head h3 { margin: 0; font-size: 15px; }
+.slot-empty { margin: 0; padding: 28px 20px; color: var(--muted, #8b97a8); font-size: 14px; }
+
+.slot-table-wrap { overflow-x: auto; }
+.slot-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.slot-table th {
+  padding: 11px 14px; text-align: left; white-space: nowrap;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted, #8b97a8); font-weight: 600;
+  border-bottom: 1px solid var(--line, #2b3444);
+}
+.slot-table td { padding: 12px 14px; border-bottom: 1px solid rgba(139, 151, 168, .14); vertical-align: middle; }
+.slot-table tbody tr:last-child td { border-bottom: none; }
+.slot-table tbody tr:hover { background: rgba(88, 166, 255, .06); }
+.slot-num, .slot-table th.slot-num { text-align: right; }
+.slot-th-rank { width: 44px; text-align: right; color: var(--muted, #8b97a8); }
+.slot-driver { font-weight: 600; }
+.slot-strong { font-weight: 700; }
+.slot-zero { color: rgba(139, 151, 168, .45); }
+.slot-start { white-space: nowrap; }
+.slot-row-exact { background: rgba(63, 185, 80, .08); }
+.slot-row-exact .slot-driver { color: #56d364; }
+
+.slot-pill { display: inline-block; margin-left: 6px; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.slot-pill-exact { background: rgba(63, 185, 80, .18); color: #56d364; }
+.slot-pill-near { background: rgba(210, 153, 34, .18); color: #e3b341; }
+
+/* Each weekday is shaded by how much of that driver's work lands on it, so the
+   pattern reads at a glance instead of needing the numbers. */
+.slot-week { display: inline-flex; gap: 3px; }
+.slot-day {
+  width: 22px; height: 22px; line-height: 22px; text-align: center;
+  border-radius: 5px; font-size: 11px; font-weight: 700;
+  background: rgba(139, 151, 168, .12); color: rgba(139, 151, 168, .5);
+}
+.slot-day.lvl1 { background: rgba(63, 185, 80, .22); color: #7ee787; }
+.slot-day.lvl2 { background: rgba(63, 185, 80, .45); color: #0d1117; }
+.slot-day.lvl3 { background: #3fb950; color: #0d1117; }
+.slot-day.sel { box-shadow: 0 0 0 2px #58a6ff; }
+
+.slot-cards { display: none; }
+.slot-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px; border-bottom: 1px solid rgba(139, 151, 168, .14);
+}
+.slot-card-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.slot-card-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.slot-card-foot { font-size: 11px; }
+
+@media (max-width: 860px) {
+  .slot-table-wrap { display: none; }
+  .slot-cards { display: block; }
+  .slot-head-meta { align-items: flex-start; }
+}
