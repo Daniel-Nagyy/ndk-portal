@@ -1266,6 +1266,19 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   const slotFilters = { weekday: "", domicile: "", solo: "", slot: "", start: "", driver: "" };
   let slotImportCarrier = "";
 
+  // Driver Slots is for Triple J dispatchers only for now. Owners never see it.
+  // The server enforces this too; this only keeps it out of the menu.
+  function canSeeDriverSlots(user) {
+    if (!user) return false;
+    const role = user.serverRole || user.role;
+    if (!["dispatcher", "superadmin"].includes(role)) return false;
+    // isTripleJClient is how the rest of the app spots Triple J; the direct
+    // checks cover the case where the client list has not loaded yet.
+    const id = String(user.clientId || "").toLowerCase();
+    const name = String(user.accountName || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    return isTripleJClient(user.clientId) || id.includes("triple") || name.includes("triplej");
+  }
+
   async function loadSlotOptions() {
     try {
       const res = await fetch("/api/driver-slots/options", { credentials: "same-origin" });
@@ -3456,7 +3469,6 @@ function renderTopbar(user) {
         { id: "recap", label: "Daily Recap", icon: "recap" },
         { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
         { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
-        { id: "driver-slots", label: "Driver Slots", icon: "drivers" },
         { id: "users", label: "Users", icon: "users" },
         { id: "clients", label: "Clients", icon: "clients" },
         { id: "announcements", label: "Announcements", icon: "announcements" },
@@ -3471,7 +3483,6 @@ function renderTopbar(user) {
         { id: 'netradyne-dashboard', label: 'Netradyne Alerts', icon: 'netradyne-dashboard' },
         { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
         { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
-        { id: "driver-slots", label: "Driver Slots", icon: "drivers" },
         { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       ];
     }
@@ -3483,7 +3494,7 @@ function renderTopbar(user) {
       { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
       { id: "dispatcher-recap", label: "Daily Recap", icon: "recap" },
       { id: "drivers", label: "Drivers", icon: "drivers" },
-      { id: "driver-slots", label: "Driver Slots", icon: "drivers" },
+      ...(canSeeDriverSlots(getCurrentUser()) ? [{ id: "driver-slots", label: "Driver Slots", icon: "drivers" }] : []),
       { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       ...shared,
     ];
@@ -3508,7 +3519,11 @@ function renderTopbar(user) {
     if (currentView === 'netradyne-recap') return renderNetradyneRecapPage(user);
     if (currentView === 'dispute-tracker') return renderDisputeTrackerPage(user);
     if (currentView === 'drivers') return renderDriversPage(user);
-    if (currentView === 'driver-slots') return renderDriverSlotsPage(user);
+    if (currentView === 'driver-slots') {
+      return canSeeDriverSlots(user)
+        ? renderDriverSlotsPage(user)
+        : `<section class="page-head"><div><h2>Not available</h2><p>Driver Slots is not enabled for this account.</p></div></section>`;
+    }
     if (currentView === "recap" || currentView === "owner-recap" || currentView === "dispatcher-recap") {
       return renderRecapPage(user);
     }

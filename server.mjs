@@ -711,6 +711,28 @@ const requestHandler = (req, res) => {  // CORS Headers
     return;
   }
 
+  // Driver Slots is limited to dispatchers on Triple J for now. Owners do not
+  // see it at all. The account is matched on id or name so it works whatever
+  // the account id turns out to be on a given deployment; set
+  // DRIVER_SLOTS_ACCOUNTS to a comma-separated list to change who gets it.
+  const SLOT_ACCOUNTS = (process.env.DRIVER_SLOTS_ACCOUNTS || '')
+    .split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
+  const slotAccountAllowed = (accountId) => {
+    if (!accountId) return false;
+    const account = getAccount(accountId);
+    const id = String(accountId).toLowerCase();
+    const name = String(account && account.name ? account.name : '').toLowerCase();
+    if (SLOT_ACCOUNTS.length) return SLOT_ACCOUNTS.includes(id) || SLOT_ACCOUNTS.includes(name);
+    return id.includes('triple') || name.replace(/\s+/g, '').includes('triplej');
+  };
+  // Returns the account to serve, or null when this user may not use the page.
+  const slotAccountFor = (user, requested) => {
+    if (!user) return null;
+    if (!['dispatcher', 'superadmin'].includes(user.role)) return null;
+    const accountId = user.role === 'superadmin' ? (requested || user.account_id) : user.account_id;
+    return slotAccountAllowed(accountId) ? accountId : null;
+  };
+
   // Upload Relay Trips CSVs straight from the Driver Slots page. On a hosted
   // deployment the exports live on a dispatcher's laptop, not on the server,
   // so the command-line importer cannot reach them.
@@ -719,13 +741,8 @@ const requestHandler = (req, res) => {  // CORS Headers
       try {
         const authUser = getAuthUser(req);
         if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
-        if (!['superadmin', 'owner', 'manager', 'dispatcher'].includes(authUser.role)) {
-          return sendJson(403, { success: false, error: 'Not allowed to import' });
-        }
-        const accountId = authUser.role === 'superadmin'
-          ? (url.searchParams.get('accountId') || authUser.account_id)
-          : authUser.account_id;
-        if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+        const accountId = slotAccountFor(authUser, url.searchParams.get('accountId'));
+        if (!accountId) return sendJson(403, { success: false, error: 'Driver Slots is not enabled for this account' });
 
         // Each export is well under a megabyte; this only stops a runaway body.
         const MAX_BYTES = 40 * 1024 * 1024;
@@ -776,10 +793,8 @@ const requestHandler = (req, res) => {  // CORS Headers
   if (url.pathname === '/api/driver-slots/options' && req.method === 'GET') {
     const authUser = getAuthUser(req);
     if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
-    const accountId = authUser.role === 'superadmin'
-      ? (url.searchParams.get('accountId') || authUser.account_id)
-      : authUser.account_id;
-    if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+    const accountId = slotAccountFor(authUser, url.searchParams.get('accountId'));
+    if (!accountId) return sendJson(403, { success: false, error: 'Driver Slots is not enabled for this account' });
     const account = getAccount(accountId);
     sendJson(200, { success: true, account: account ? account.name : accountId, accountId, ...driverSlotOptions(accountId) });
     return;
@@ -788,10 +803,8 @@ const requestHandler = (req, res) => {  // CORS Headers
   if (url.pathname === '/api/driver-slots' && req.method === 'GET') {
     const authUser = getAuthUser(req);
     if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
-    const accountId = authUser.role === 'superadmin'
-      ? (url.searchParams.get('accountId') || authUser.account_id)
-      : authUser.account_id;
-    if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+    const accountId = slotAccountFor(authUser, url.searchParams.get('accountId'));
+    if (!accountId) return sendJson(403, { success: false, error: 'Driver Slots is not enabled for this account' });
     const weekdayParam = url.searchParams.get('weekday');
     const drivers = driverSlotMatches(accountId, {
       weekday: weekdayParam === null || weekdayParam === '' ? '' : Number(weekdayParam),
