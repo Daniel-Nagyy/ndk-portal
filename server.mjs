@@ -18,7 +18,8 @@ import {
   getDisputes, syncDisputes, getDisputeById, deleteDispute,
   listDrivers, getDriverById, upsertDriver, deleteDriver,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
-  getAccountByApiKey, regenerateApiKey
+  getAccountByApiKey, regenerateApiKey,
+  driverSlotOptions, driverSlotMatches
 } from './db.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
 
@@ -706,6 +707,42 @@ const requestHandler = (req, res) => {  // CORS Headers
         sendJson(500, { success: false, error: simplifyError(error) });
       }
     })();
+    return;
+  }
+
+  // ---------- Driver slots (who works which slot) ----------
+  // Account-scoped: a dispatcher only ever sees their own account's history.
+  // A superadmin may name another account with ?accountId=.
+  if (url.pathname === '/api/driver-slots/options' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
+    const accountId = authUser.role === 'superadmin'
+      ? (url.searchParams.get('accountId') || authUser.account_id)
+      : authUser.account_id;
+    if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+    const account = getAccount(accountId);
+    sendJson(200, { success: true, account: account ? account.name : accountId, accountId, ...driverSlotOptions(accountId) });
+    return;
+  }
+
+  if (url.pathname === '/api/driver-slots' && req.method === 'GET') {
+    const authUser = getAuthUser(req);
+    if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
+    const accountId = authUser.role === 'superadmin'
+      ? (url.searchParams.get('accountId') || authUser.account_id)
+      : authUser.account_id;
+    if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+    const weekdayParam = url.searchParams.get('weekday');
+    const drivers = driverSlotMatches(accountId, {
+      weekday: weekdayParam === null || weekdayParam === '' ? '' : Number(weekdayParam),
+      domicile: url.searchParams.get('domicile') || '',
+      solo: url.searchParams.get('solo') || '',
+      slot: url.searchParams.get('slot') || '',
+      start: url.searchParams.get('start') || '',
+      tractor: url.searchParams.get('tractor') || '',
+      driver: url.searchParams.get('driver') || '',
+    });
+    sendJson(200, { success: true, drivers });
     return;
   }
 

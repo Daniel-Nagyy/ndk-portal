@@ -1246,13 +1246,48 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     dataRefreshing = true;
     if (manual) render();
     try {
-      await Promise.all([loadRecaps(), loadDownTrucks(), loadNetradyneRecaps(), loadDisputes(), loadDrivers()]);
+      await Promise.all([loadRecaps(), loadDownTrucks(), loadNetradyneRecaps(), loadDisputes(), loadDrivers(), loadSlotOptions()]);
       if (["owner", "dispatcher"].includes(user.role)) await fetchGeotabDriversReadiness();
       await pollNetradyneAlerts();
     } catch (_) { /* ignore */ }
     dataRefreshing = false;
     render();
     if (manual) showToast("Refreshed.");
+  }
+
+  // Driver Slots dashboard: which drivers have worked a given slot before.
+  // `slotOptions` is what the filters offer, `slotMatches` the current answer.
+  let slotOptions = null;
+  let slotMatches = [];
+  let slotLoading = false;
+  let slotLoadedOnce = false;
+  const slotFilters = { weekday: "", domicile: "", solo: "", slot: "", start: "", driver: "" };
+
+  async function loadSlotOptions() {
+    try {
+      const res = await fetch("/api/driver-slots/options", { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.success) slotOptions = data;
+    } catch (e) {
+      console.warn("Failed to load slot options:", e);
+    }
+  }
+
+  async function loadSlotMatches() {
+    slotLoading = true;
+    try {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(slotFilters)) if (value !== "") params.set(key, value);
+      const res = await fetch(`/api/driver-slots?${params}`, { credentials: "same-origin" });
+      const data = await res.json();
+      slotMatches = data.success && Array.isArray(data.drivers) ? data.drivers : [];
+    } catch (e) {
+      console.warn("Failed to load slot matches:", e);
+      slotMatches = [];
+    } finally {
+      slotLoading = false;
+      render();
+    }
   }
 
   async function loadDownTrucks() {
@@ -2244,6 +2279,155 @@ const parsed = parseNetradynePaste(text, clientId);
   }
 
 
+  // ---------- Driver Slots ----------
+  // Pick a day and a slot; see who has worked it, most often first. The point
+  // is covering a call-off: the driver at the top of the list is the one who
+  // already knows this run.
+  const SLOT_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const SLOT_DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  function slotDomicileColumns() {
+    // A column per domicile that exists in the data, so CLT sits beside MGE
+    // without either being hard-coded.
+    const known = (slotOptions && slotOptions.domiciles) || [];
+    if (known.length) return known;
+    const seen = new Set();
+    for (const d of slotMatches) for (const key of Object.keys(d.domiciles || {})) seen.add(key);
+    return [...seen].sort();
+  }
+
+  function slotFilterSummary() {
+    const bits = [];
+    if (slotFilters.weekday !== "") bits.push(SLOT_DAYS[Number(slotFilters.weekday)]);
+    if (slotFilters.domicile) bits.push(slotFilters.domicile);
+    if (slotFilters.solo) bits.push(slotFilters.solo);
+    if (slotFilters.slot) bits.push(slotFilters.slot);
+    if (slotFilters.start) bits.push(`starts ${slotFilters.start}`);
+    return bits.length ? bits.join(" · ") : "every slot";
+  }
+
+  function renderSlotWeekStrip(days) {
+    return SLOT_DAYS_SHORT
+      .map((name, i) => {
+        const count = days[i] || days[String(i)] || 0;
+        const on = count > 0;
+        const selected = slotFilters.weekday !== "" && Number(slotFilters.weekday) === i;
+        return `<span class="slot-day ${on ? "on" : "off"}${selected ? " sel" : ""}" title="${name}: ${count} shift(s)">${name.charAt(0)}</span>`;
+      })
+      .join("");
+  }
+
+  function renderDriverSlotsPage(user) {
+    // First visit: fetch after this paint so the page appears straight away.
+    if (!slotLoadedOnce && !slotLoading) {
+      slotLoadedOnce = true;
+      window.setTimeout(loadSlotMatches, 0);
+      if (!slotOptions) loadSlotOptions().then(render);
+    }
+    const options = slotOptions || { domiciles: [], solos: [], slots: [], starts: [], shifts: 0 };
+    const domiciles = slotDomicileColumns();
+    const select = (key, label, values, formatter) => `
+      <label class="field compact-field">
+        <span class="field-label">${escapeHtml(label)}</span>
+        <select class="table-control" data-slot-filter="${key}">
+          <option value="">Any</option>
+          ${values.map((v) => `<option value="${escapeHtml(String(v))}"${String(slotFilters[key]) === String(v) ? " selected" : ""}>${escapeHtml(formatter ? formatter(v) : String(v))}</option>`).join("")}
+        </select>
+      </label>`;
+
+    const rows = slotMatches;
+    const totalShifts = rows.reduce((sum, r) => sum + r.shifts, 0);
+
+    return `
+      <section class="page-head">
+        <div>
+          <h2>Driver Slots</h2>
+          <p>Who has worked a slot before, so a call-off goes to someone who already knows the run.</p>
+        </div>
+      </section>
+
+      <div class="toolbar">
+        ${select("weekday", "📅 Day", [0, 1, 2, 3, 4, 5, 6], (v) => SLOT_DAYS[v])}
+        ${select("domicile", "🏢 Domicile", options.domiciles)}
+        ${select("solo", "🚚 Solo", options.solos)}
+        ${select("slot", "🔁 Slot", options.slots)}
+        ${select("start", "⏰ Start", options.starts)}
+        <label class="field compact-field" style="flex:1;min-width:160px">
+          <span class="field-label">🔎 Driver</span>
+          <input class="table-control" type="search" data-slot-search placeholder="Driver name…" value="${escapeHtml(slotFilters.driver)}" />
+        </label>
+        <div class="day-meta">
+          <span>${rows.length} driver(s), ${totalShifts} shift(s)</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h3>${escapeHtml(slotFilterSummary())}</h3>
+            <p>${options.shifts ? `${options.shifts} blocks on file${options.first ? `, ${escapeHtml(options.first)} to ${escapeHtml(options.last)}` : ""}.` : "No block history imported yet."}</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-secondary btn-small" type="button" data-action="slot-reset">Clear filters</button>
+            <span class="pill blue">${escapeHtml(options.account || "")}</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          ${!options.shifts
+            ? `<p class="empty-state">No history imported. Run <code>node scripts/import-trips.mjs ${escapeHtml(options.accountId || "<account>")} &lt;folder with Trips CSVs&gt; --carrier TJER</code> on the server.</p>`
+            : slotLoading
+              ? `<p class="empty-state">Loading…</p>`
+              : !rows.length
+                ? `<p class="empty-state">Nobody has worked ${escapeHtml(slotFilterSummary())}. Try widening the filters — some combinations never happen, for example d1 only runs Monday to Thursday.</p>`
+                : `
+          <div class="recap-table-desktop">
+            <table class="data-table slot-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Driver</th>
+                  <th class="col-num">Shifts</th>
+                  ${domiciles.map((d) => `<th class="col-num">${escapeHtml(d)}</th>`).join("")}
+                  <th>Usual start</th>
+                  <th>Their week</th>
+                  <th>Last worked</th>
+                  <th>Tractors</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((r, i) => `
+                  <tr>
+                    <td class="col-num">${i + 1}</td>
+                    <td class="col-driver"><strong>${escapeHtml(r.driver)}</strong></td>
+                    <td class="col-num">${r.shifts}</td>
+                    ${domiciles.map((d) => `<td class="col-num">${(r.domiciles && r.domiciles[d]) || ""}</td>`).join("")}
+                    <td>${r.starts && r.starts.length
+                        ? `${escapeHtml(r.starts[0].start)} <span class="muted">${Math.round((r.starts[0].shifts / r.shifts) * 100)}%</span>`
+                        : ""}</td>
+                    <td class="slot-week">${renderSlotWeekStrip(r.days || {})}</td>
+                    <td>${escapeHtml(r.lastWorked || "")}</td>
+                    <td class="muted">${escapeHtml((r.tractors || []).join(" "))}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+          ${renderSlotMobileCards(rows, domiciles)}`}
+        </div>
+      </div>`;
+  }
+
+  function renderSlotMobileCards(rows, domiciles) {
+    return `<div class="mobile-cards slot-cards">
+      ${rows.map((r) => `
+        <article class="mobile-card">
+          <header><strong>${escapeHtml(r.driver)}</strong><span class="pill green">${r.shifts} shift(s)</span></header>
+          <p>${domiciles.map((d) => `${escapeHtml(d)} ${(r.domiciles && r.domiciles[d]) || 0}`).join(" · ")}</p>
+          <p>Usual start ${r.starts && r.starts.length ? escapeHtml(r.starts[0].start) : "—"} · last ${escapeHtml(r.lastWorked || "—")}</p>
+          <p class="slot-week">${renderSlotWeekStrip(r.days || {})}</p>
+        </article>`).join("")}
+    </div>`;
+  }
+
   function renderDriversPage(user) {
     const list = visibleDrivers();
     return `
@@ -3028,7 +3212,7 @@ const parsed = parseNetradynePaste(text, clientId);
 
     // Keep focus/caret in whichever search box was active (they live outside a
     // data-form, so a re-render would otherwise blur them after each keystroke).
-    const SEARCH_ATTRS = ["data-search", "data-nr-search", "data-dispute-search", "data-driver-search"];
+    const SEARCH_ATTRS = ["data-search", "data-nr-search", "data-dispute-search", "data-driver-search", "data-slot-search"];
     const focusedSearchAttr = (activeEl && activeEl.getAttribute) ? (SEARCH_ATTRS.find((a) => activeEl.hasAttribute(a)) || null) : null;
     const searchSel = focusedSearchAttr ? [activeEl.selectionStart, activeEl.selectionEnd] : null;
 
@@ -3212,6 +3396,7 @@ function renderTopbar(user) {
         { id: "recap", label: "Daily Recap", icon: "recap" },
         { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
         { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
+        { id: "driver-slots", label: "Driver Slots", icon: "drivers" },
         { id: "users", label: "Users", icon: "users" },
         { id: "clients", label: "Clients", icon: "clients" },
         { id: "announcements", label: "Announcements", icon: "announcements" },
@@ -3226,6 +3411,7 @@ function renderTopbar(user) {
         { id: 'netradyne-dashboard', label: 'Netradyne Alerts', icon: 'netradyne-dashboard' },
         { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
         { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
+        { id: "driver-slots", label: "Driver Slots", icon: "drivers" },
         { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       ];
     }
@@ -3237,6 +3423,7 @@ function renderTopbar(user) {
       { id: "dispute-tracker", label: "Dispute Tracker", icon: "dispute-tracker" },
       { id: "dispatcher-recap", label: "Daily Recap", icon: "recap" },
       { id: "drivers", label: "Drivers", icon: "drivers" },
+      { id: "driver-slots", label: "Driver Slots", icon: "drivers" },
       { id: "truck-tracker", label: "Truck Tracker", icon: "truck-tracker" },
       ...shared,
     ];
@@ -3261,6 +3448,7 @@ function renderTopbar(user) {
     if (currentView === 'netradyne-recap') return renderNetradyneRecapPage(user);
     if (currentView === 'dispute-tracker') return renderDisputeTrackerPage(user);
     if (currentView === 'drivers') return renderDriversPage(user);
+    if (currentView === 'driver-slots') return renderDriverSlotsPage(user);
     if (currentView === "recap" || currentView === "owner-recap" || currentView === "dispatcher-recap") {
       return renderRecapPage(user);
     }
@@ -6566,6 +6754,11 @@ case "hos-close-filters":
         selectedDisputeWeek = isoAddDays(selectedDisputeWeek, 7);
         render();
         break;
+      case "slot-reset":
+        for (const key of Object.keys(slotFilters)) slotFilters[key] = "";
+        render();
+        loadSlotMatches();
+        return;
       case "dispute-week-today":
         selectedDisputeWeek = disputeWeekStartOf(todayISO());
         render();
@@ -6646,6 +6839,14 @@ case "hos-close-filters":
   async function handleChange(event) {
     // Don't re-render on login view to avoid clearing form inputs
     if (currentView === "login") return;
+
+    const slotFilter = event.target.closest("[data-slot-filter]");
+    if (slotFilter) {
+      slotFilters[slotFilter.getAttribute("data-slot-filter")] = slotFilter.value;
+      render();
+      loadSlotMatches();
+      return;
+    }
 
     const datePicker = event.target.closest("[data-recap-date-picker]");
     if (datePicker) {
@@ -6870,6 +7071,14 @@ if (netradyneSearch && currentView === 'netradyne-dashboard') {
       disputeSearch = disputeSearchInput.value;
       window.clearTimeout(handleInput.searchTimer);
       handleInput.searchTimer = window.setTimeout(render, 120);
+      return;
+    }
+
+    const slotSearchInput = event.target.closest("[data-slot-search]");
+    if (slotSearchInput && currentView === "driver-slots") {
+      slotFilters.driver = slotSearchInput.value;
+      window.clearTimeout(handleInput.searchTimer);
+      handleInput.searchTimer = window.setTimeout(loadSlotMatches, 200);
       return;
     }
 

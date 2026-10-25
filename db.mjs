@@ -108,6 +108,33 @@ CREATE TABLE IF NOT EXISTS down_trucks (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- One row per Relay block worked, imported from the Trips CSV exports. The
+-- Operator ID on those exports (TJER_MGE_Solo1_Tractor_21_d1) is the slot: the
+-- carrier, the domicile, the solo type, the tractor and which of the tractor's
+-- two shifts it is. Keyed on the block id so re-importing the same export, or
+-- overlapping exports, never double-counts a shift.
+CREATE TABLE IF NOT EXISTS driver_shifts (
+  block_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  driver TEXT NOT NULL,
+  driver_key TEXT NOT NULL,
+  operator_id TEXT,
+  carrier TEXT,
+  domicile TEXT,
+  solo TEXT,
+  tractor TEXT,
+  shift_slot TEXT,
+  weekday INTEGER,
+  start_date TEXT,
+  start_time TEXT,
+  origin TEXT,
+  imported_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_lookup
+  ON driver_shifts (account_id, weekday, domicile, solo, shift_slot);
+CREATE INDEX IF NOT EXISTS idx_driver_shifts_driver
+  ON driver_shifts (account_id, driver_key);
+
 -- Failed provider logins (Geotab/Netradyne). Persisted so a wrong password stays
 -- blocked across restarts instead of resetting the counter and locking the account.
 CREATE TABLE IF NOT EXISTS auth_failures (
@@ -183,6 +210,111 @@ export function clearAuthFailure(provider, ref) {
 
 export function listAuthFailures() {
   return db.prepare("SELECT * FROM auth_failures ORDER BY provider, ref").all();
+}
+
+// ---------- Driver slots (who works which slot, and when) ----------
+
+const insertDriverShift = () => db.prepare(`INSERT INTO driver_shifts
+  (block_id, account_id, driver, driver_key, operator_id, carrier, domicile, solo, tractor,
+   shift_slot, weekday, start_date, start_time, origin)
+  VALUES (@block_id,@account_id,@driver,@driver_key,@operator_id,@carrier,@domicile,@solo,@tractor,
+   @shift_slot,@weekday,@start_date,@start_time,@origin)
+  ON CONFLICT(block_id) DO UPDATE SET
+   driver=excluded.driver, driver_key=excluded.driver_key, operator_id=excluded.operator_id,
+   carrier=excluded.carrier, domicile=excluded.domicile, solo=excluded.solo, tractor=excluded.tractor,
+   shift_slot=excluded.shift_slot, weekday=excluded.weekday, start_date=excluded.start_date,
+   start_time=excluded.start_time, origin=excluded.origin`);
+
+export function saveDriverShifts(rows) {
+  const stmt = insertDriverShift();
+  const run = db.transaction((items) => {
+    for (const row of items) stmt.run(row);
+  });
+  run(rows);
+  return rows.length;
+}
+
+// The values the dashboard's filters offer, taken from what was actually imported.
+export function driverSlotOptions(accountId) {
+  const pick = (column) => db
+    .prepare(`SELECT DISTINCT ${column} AS v FROM driver_shifts WHERE account_id = ? AND ${column} IS NOT NULL AND ${column} <> '' ORDER BY v`)
+    .all(accountId)
+    .map((r) => r.v);
+  const range = db
+    .prepare("SELECT MIN(start_date) AS first, MAX(start_date) AS last, COUNT(*) AS shifts FROM driver_shifts WHERE account_id = ?")
+    .get(accountId) || {};
+  return {
+    domiciles: pick("domicile"),
+    solos: pick("solo"),
+    slots: pick("shift_slot"),
+    starts: pick("start_time"),
+    tractors: pick("tractor"),
+    first: range.first || null,
+    last: range.last || null,
+    shifts: range.shifts || 0,
+  };
+}
+
+// Drivers who have worked the chosen slot, most often first. `weekday` is
+// 0=Monday. Every filter is optional, so an empty filter answers "who works
+// this slot at all".
+export function driverSlotMatches(accountId, filters = {}) {
+  const where = ["account_id = ?"];
+  const args = [accountId];
+  const add = (sql, value) => {
+    if (value === undefined || value === null || value === "") return;
+    where.push(sql);
+    args.push(value);
+  };
+  add("weekday = ?", filters.weekday);
+  add("domicile = ?", filters.domicile);
+  add("solo = ?", filters.solo);
+  add("shift_slot = ?", filters.slot);
+  add("start_time = ?", filters.start);
+  add("tractor = ?", filters.tractor);
+  if (filters.driver) {
+    where.push("driver_key LIKE ?");
+    args.push(`%${String(filters.driver).toLowerCase()}%`);
+  }
+  const clause = where.join(" AND ");
+
+  const drivers = db.prepare(`SELECT driver_key AS key, MAX(driver) AS driver, COUNT(*) AS shifts,
+      MIN(start_date) AS firstWorked, MAX(start_date) AS lastWorked
+    FROM driver_shifts WHERE ${clause}
+    GROUP BY driver_key ORDER BY shifts DESC, lastWorked DESC`).all(...args);
+
+  // Per-domicile counts for the same filter, so the table can show a column
+  // per domicile (MGE, CLT, anything else that turns up) instead of hard-coding.
+  const byDomicile = db.prepare(`SELECT driver_key AS key, domicile, COUNT(*) AS shifts
+    FROM driver_shifts WHERE ${clause} GROUP BY driver_key, domicile`).all(...args);
+  const starts = db.prepare(`SELECT driver_key AS key, start_time AS start, COUNT(*) AS shifts
+    FROM driver_shifts WHERE ${clause} GROUP BY driver_key, start_time ORDER BY shifts DESC`).all(...args);
+  const tractors = db.prepare(`SELECT driver_key AS key, tractor, COUNT(*) AS shifts
+    FROM driver_shifts WHERE ${clause} AND tractor <> '' GROUP BY driver_key, tractor ORDER BY shifts DESC`).all(...args);
+
+  // Every weekday for these drivers regardless of the weekday filter, so the
+  // dashboard can show the rest of their week next to the day being filled.
+  const dayArgs = args.filter((_, i) => where[i] !== "weekday = ?");
+  const dayClause = where.filter((w) => w !== "weekday = ?").join(" AND ");
+  const byDay = db.prepare(`SELECT driver_key AS key, weekday, COUNT(*) AS shifts
+    FROM driver_shifts WHERE ${dayClause} GROUP BY driver_key, weekday`).all(...dayArgs);
+
+  const index = new Map(drivers.map((d) => [d.key, { ...d, domiciles: {}, days: {}, starts: [], tractors: [] }]));
+  for (const r of byDomicile) index.get(r.key) && (index.get(r.key).domiciles[r.domicile || "?"] = r.shifts);
+  for (const r of byDay) index.get(r.key) && (index.get(r.key).days[r.weekday] = r.shifts);
+  for (const r of starts) {
+    const d = index.get(r.key);
+    if (d && d.starts.length < 4) d.starts.push({ start: r.start, shifts: r.shifts });
+  }
+  for (const r of tractors) {
+    const d = index.get(r.key);
+    if (d && d.tractors.length < 3) d.tractors.push(r.tractor);
+  }
+  return [...index.values()];
+}
+
+export function clearDriverShifts(accountId) {
+  return db.prepare("DELETE FROM driver_shifts WHERE account_id = ?").run(accountId).changes;
 }
 
 export function getAccountByApiKey(key) {

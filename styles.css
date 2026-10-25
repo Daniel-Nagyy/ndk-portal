@@ -5003,3 +5003,22 @@ textarea.table-control {
 /* HOS desktop: separate the "X of Y drivers" meta row from the filters above it. */
 .hos-controls-meta { margin-top: 10px; }
 
+
+
+/* ---- Driver Slots ---- */
+.slot-week { white-space: nowrap; }
+.slot-day {
+  display: inline-block;
+  width: 18px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 18px;
+  border-radius: 4px;
+  margin-right: 2px;
+  background: #eceff3;
+  color: #9aa5b1;
+}
+.slot-day.on { background: #d7f0df; color: #1a7f37; font-weight: 600; }
+.slot-day.sel { outline: 2px solid #1f6feb; outline-offset: -2px; }
+.slot-table .col-num { text-align: right; }
+.slot-table .muted { color: #8b97a8; }
