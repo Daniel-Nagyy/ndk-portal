@@ -274,8 +274,13 @@ export function driverSlotOptions(accountId) {
     .prepare(`SELECT DISTINCT domicile AS v FROM driver_shifts WHERE ${slotBaseWhere()} ORDER BY v`)
     .all(...slotBaseArgs(accountId))
     .map((r) => r.v);
+  const solos = db
+    .prepare(`SELECT DISTINCT solo AS v FROM driver_shifts WHERE ${slotBaseWhere()} AND solo <> '' ORDER BY v`)
+    .all(...slotBaseArgs(accountId))
+    .map((r) => r.v);
   return {
     domiciles,
+    solos,
     starts: SLOT_START_TIMES,
     first: range.first || null,
     last: range.last || null,
@@ -300,6 +305,7 @@ export function driverSlotMatches(accountId, filters = {}) {
   const hasWeekday = filters.weekday !== undefined && filters.weekday !== null && filters.weekday !== "";
   if (hasWeekday) add("weekday = ?", Number(filters.weekday));
   if (filters.domicile) add("domicile = ?", filters.domicile);
+  if (filters.solo) add("solo = ?", filters.solo);
   if (filters.driver) add("driver_key LIKE ?", `%${String(filters.driver).toLowerCase()}%`);
 
   const span = filters.startSpan === undefined ? 120 : Number(filters.startSpan);
@@ -333,14 +339,19 @@ export function driverSlotMatches(accountId, filters = {}) {
     FROM driver_shifts WHERE @where GROUP BY driver_key, domicile`);
   const starts = query(`SELECT driver_key AS key, start_time AS start, COUNT(*) AS shifts
     FROM driver_shifts WHERE @where GROUP BY driver_key, start_time ORDER BY shifts DESC`);
+  // Solo 1 and Solo 2 are counted separately rather than reduced to one label:
+  // a good half of these drivers run both, so a single badge would be wrong.
+  const bySolo = query(`SELECT driver_key AS key, solo, COUNT(*) AS shifts
+    FROM driver_shifts WHERE @where GROUP BY driver_key, solo`);
   // Every weekday for these drivers, ignoring the weekday filter, so the whole
   // week shows next to the day being covered.
   const week = build(true);
   const byDay = db.prepare(`SELECT driver_key AS key, weekday, COUNT(*) AS shifts
     FROM driver_shifts WHERE ${week.clause} GROUP BY driver_key, weekday`).all(...week.args);
 
-  const index = new Map(drivers.map((d) => [d.key, { ...d, domiciles: {}, days: {}, starts: [] }]));
+  const index = new Map(drivers.map((d) => [d.key, { ...d, domiciles: {}, solos: {}, days: {}, starts: [] }]));
   for (const r of byDomicile) if (index.has(r.key)) index.get(r.key).domiciles[r.domicile || "?"] = r.shifts;
+  for (const r of bySolo) if (index.has(r.key) && r.solo) index.get(r.key).solos[r.solo] = r.shifts;
   for (const r of byDay) if (index.has(r.key)) index.get(r.key).days[r.weekday] = r.shifts;
   for (const r of starts) {
     const d = index.get(r.key);
@@ -369,7 +380,7 @@ export function driverSlotMatches(accountId, filters = {}) {
 // claims does not exist.
 export function driverSlotHistory(accountId, driverKey, limit = 60) {
   return db
-    .prepare(`SELECT start_date AS date, start_time AS start, weekday, domicile, operator_id AS operator
+    .prepare(`SELECT start_date AS date, start_time AS start, weekday, domicile, solo, operator_id AS operator
       FROM driver_shifts
       WHERE ${slotBaseWhere()} AND driver_key = ?
       ORDER BY start_date DESC, start_time DESC

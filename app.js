@@ -1282,7 +1282,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     }
     render();
   }
-  const slotFilters = { weekday: "", domicile: "", start: "", startSpan: "120", driver: "" };
+  const slotFilters = { weekday: "", domicile: "", solo: "", start: "", startSpan: "120", driver: "" };
 
   // Refreshing the history. Relay exports sit on a dispatcher's laptop and the
   // hosted container cannot reach them, so the CSVs come up through the
@@ -2393,6 +2393,25 @@ const parsed = parseNetradynePaste(text, clientId);
     return `<span class="slot-pill slot-pill-near">±${text}</span>`;
   }
 
+  // Solo 1 and Solo 2 side by side rather than one label, because about half
+  // these drivers run both and a single badge would hide that.
+  const SOLO_TYPES = ["Solo1", "Solo2"];
+  const soloShort = (name) => name.replace(/^Solo/i, "S");
+
+  function renderSlotSolos(solos) {
+    const counts = solos || {};
+    const known = Object.keys(counts).length
+      ? [...new Set([...SOLO_TYPES, ...Object.keys(counts)])]
+      : SOLO_TYPES;
+    return `<div class="slot-solos">${known
+      .map((type) => {
+        const n = counts[type] || 0;
+        return `<span class="slot-solo${n ? "" : " slot-solo-none"}"
+          title="${escapeHtml(type)}: ${n} shift${n === 1 ? "" : "s"}">${escapeHtml(soloShort(type))}<b>${n || "–"}</b></span>`;
+      })
+      .join("")}</div>`;
+  }
+
   // The week at a glance. Each day is shaded by how much of that driver's work
   // falls on it, so a glance says "works Tue to Sat" without reading numbers.
   function renderSlotWeek(days, selectedWeekday) {
@@ -2413,6 +2432,7 @@ const parsed = parseNetradynePaste(text, clientId);
     const bits = [];
     bits.push(slotFilters.weekday === "" ? "Any day" : SLOT_DAYS[Number(slotFilters.weekday)]);
     if (slotFilters.domicile) bits.push(slotFilters.domicile);
+    if (slotFilters.solo) bits.push(slotFilters.solo.replace(/^Solo/i, "Solo "));
     if (slotFilters.start) {
       const span = Number(slotFilters.startSpan);
       bits.push(span ? `${slotFilters.start} ±${span / 60}h` : `${slotFilters.start} exactly`);
@@ -2474,6 +2494,7 @@ const parsed = parseNetradynePaste(text, clientId);
         <section class="slot-filters">
           ${field("Day", select("weekday", [0, 1, 2, 3, 4, 5, 6], (v) => SLOT_DAYS[v], "Any day"))}
           ${field("Domicile", select("domicile", options.domiciles, null, "MGE and CLT"))}
+          ${field("Solo", select("solo", options.solos || [], (v) => v.replace(/^Solo/i, "Solo "), "Solo 1 and 2"))}
           ${field("Block start", select("start", options.starts, null, "Any time"))}
           ${field("Window", select("startSpan", SLOT_SPANS))}
           ${field("Driver", `<input class="slot-input" type="search" data-slot-search placeholder="Search a name…" value="${escapeHtml(slotFilters.driver)}" />`)}
@@ -2503,6 +2524,7 @@ const parsed = parseNetradynePaste(text, clientId);
                   <th>Driver</th>
                   <th class="slot-num">Shifts</th>
                   ${domiciles.map((d) => `<th class="slot-num">${escapeHtml(d)}</th>`).join("")}
+                  <th>Solo</th>
                   <th>Usual start</th>
                   <th>Week</th>
                   <th>Last worked</th>
@@ -2524,6 +2546,7 @@ const parsed = parseNetradynePaste(text, clientId);
                         return `<td class="slot-num${n ? "" : " slot-zero"}">${n || "–"}</td>`;
                       })
                       .join("")}
+                    <td>${renderSlotSolos(r.solos)}</td>
                     <td class="slot-start">${escapeHtml(r.usualStart || "—")} ${slotOffsetLabel(r)}</td>
                     <td>${renderSlotWeek(r.days || {}, slotFilters.weekday)}</td>
                     <td class="slot-muted">${escapeHtml(r.lastWorked || "")}</td>
@@ -2577,6 +2600,7 @@ const parsed = parseNetradynePaste(text, clientId);
                   <span class="slot-history-date">${escapeHtml(shift.date)}</span>
                   <span class="slot-history-time">${escapeHtml(shift.start || "—")}</span>
                   <span class="slot-chip slot-chip-sm">${escapeHtml(shift.domicile || "?")}</span>
+                  <span class="slot-chip slot-chip-sm">${escapeHtml(soloShort(shift.solo || "?"))}</span>
                 </div>`
                 )
                 .join("")}
@@ -2590,7 +2614,7 @@ const parsed = parseNetradynePaste(text, clientId);
   function renderSlotHistoryRow(driver, domicileCount) {
     // 6 fixed columns (rank, driver, shifts, usual start, week, last worked)
     // plus one per domicile.
-    return `<tr class="slot-history-row"><td colspan="${6 + domicileCount}">${renderSlotHistoryList(driver)}</td></tr>`;
+    return `<tr class="slot-history-row"><td colspan="${7 + domicileCount}">${renderSlotHistoryList(driver)}</td></tr>`;
   }
 
   function renderSlotMobileCards(rows, domiciles) {
@@ -2606,6 +2630,9 @@ const parsed = parseNetradynePaste(text, clientId);
           <div class="slot-card-row">
             <span>${escapeHtml(r.usualStart || "—")} ${slotOffsetLabel(r)}</span>
             <span class="slot-muted">${domiciles.map((d) => `${escapeHtml(d)} ${(r.domiciles && r.domiciles[d]) || 0}`).join(" · ")}</span>
+          </div>
+          <div class="slot-card-row">
+            ${renderSlotSolos(r.solos)}
           </div>
           ${renderSlotWeek(r.days || {}, slotFilters.weekday)}
           <div class="slot-muted slot-card-foot">Last worked ${escapeHtml(r.lastWorked || "—")}</div>

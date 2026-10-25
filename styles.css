@@ -5149,5 +5149,14 @@ textarea.table-control {
 .slot-history-date { color: var(--muted, #8b97a8); }
 .slot-history-time { font-weight: 600; margin-left: auto; }
 .slot-chip-sm { padding: 1px 7px; font-size: 10px; }
+.slot-solos { display: flex; gap: 5px; }
+.slot-solo {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px; border-radius: 5px; font-size: 11px;
+  background: #15263c; border: 1px solid #22395a; color: #9fc6f5;
+}
+.slot-solo b { font-weight: 600; color: #d8e8fb; }
+.slot-solo-none { background: transparent; border-color: #23262c; color: #5b6069; }
+.slot-solo-none b { color: #5b6069; font-weight: 400; }
 
 .slot-card .slot-history { padding: 12px 0 0; }

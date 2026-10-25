@@ -786,6 +786,7 @@ const requestHandler = (req, res) => {  // CORS Headers
     const drivers = driverSlotMatches(accountId, {
       weekday: weekdayParam === null || weekdayParam === '' ? '' : Number(weekdayParam),
       domicile: url.searchParams.get('domicile') || '',
+      solo: url.searchParams.get('solo') || '',
       start,
       startSpan,
       driver: url.searchParams.get('driver') || '',
