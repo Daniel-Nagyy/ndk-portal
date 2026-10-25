@@ -1563,6 +1563,21 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   return normalizedName.includes("triplej");
 }
 
+// Triple J asked for On Duty Time and Issues / Comments off the daily recap
+// for now. The columns are only hidden: both fields stay on the row and keep
+// whatever was already typed into them, so turning this off brings them back
+// with their data intact.
+const RECAP_HIDDEN_TRIPLE_J = ["onDuty", "issues"];
+
+function recapHides(field) {
+  const user = typeof getCurrentUser === "function" ? getCurrentUser() : null;
+  if (!user) return false;
+  const id = String(user.clientId || "").toLowerCase();
+  const name = String(user.accountName || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const tripleJ = isTripleJClient(user.clientId) || id.includes("triple") || name.includes("triplej");
+  return tripleJ && RECAP_HIDDEN_TRIPLE_J.includes(field);
+}
+
 // How long before Stop 1 the driver is due at the yard. Triple J used to be 15;
 // it is now 30, the same as every other account, so this no longer varies.
 // Kept as a function because the Requested Start column, the recompute when a
@@ -4923,7 +4938,7 @@ function renderMobileRecapCards(rows) {
     <div class="mobile-card-list">
       ${rows.map((row) => {
       const missing = missingRequired(row);
-      const hasIssue = row.issues || missing.length || row.lateFirstStop;
+      const hasIssue = (!recapHides("issues") && row.issues) || missing.length || row.lateFirstStop;
       return `
             <article class="recap-card-v2 ${hasIssue ? 'has-issue' : ''}">
               <div class="rcv-header">
@@ -4950,7 +4965,7 @@ function renderMobileRecapCards(rows) {
                   <span>BOL</span><strong>${escapeHtml(row.bol || '–')}</strong>
                 </div>
               </div>
-              ${hasIssue ? `<div class="rcv-issue-text">⚠ ${escapeHtml(row.issues || missing.join(', '))}</div>` : ''}
+              ${hasIssue ? `<div class="rcv-issue-text">⚠ ${escapeHtml((recapHides("issues") ? "" : row.issues) || missing.join(', '))}</div>` : ''}
             </article>
           `;
     }).join('')}
@@ -5124,13 +5139,13 @@ function renderRecapPage(user) {
               <th>Solo 1 - Solo 5</th>
               <th>Truck</th>
               <th>Fuel</th>
-              <th>On Duty Time</th>
+              ${recapHides("onDuty") ? "" : "<th>On Duty Time</th>"}
               <th>Requested Start</th>
               <th>Stop 1 upcoming</th>
               <th>Scheduled Final</th>
               <th>Start Message Sent</th>
               <th>Late First Stop?</th>
-              <th>Issues / Comments</th>
+              ${recapHides("issues") ? "" : "<th>Issues / Comments</th>"}
               <th>Starting Message</th>
               <th>Actions</th>
             </tr>
@@ -5153,7 +5168,7 @@ function renderRecapMobileCards(rows) {
         const blockId = row.blockId || '–';
 
         // Determine issue badge
-        const hasIssue = (row.issues && row.issues.trim()) || missing.length > 0;
+        const hasIssue = (!recapHides("issues") && row.issues && row.issues.trim()) || missing.length > 0;
 
         // Helper to format a field: label + value (with fallback)
         const field = (label, value) => `
@@ -5184,13 +5199,13 @@ function renderRecapMobileCards(rows) {
               ${field('Solo', row.solo)}
               ${field('Truck', row.truck)}
               ${field('Fuel', row.fuel)}
-              ${field('On Duty', row.onDuty)}
+              ${recapHides("onDuty") ? "" : field('On Duty', row.onDuty)}
               ${field('Requested Start', row.requestedStart)}
               ${field('Stop 1 upcoming', row.stopOneupcoming)}
               ${field('Scheduled Final', row.scheduledFinal)}
               ${field('Start Message Sent', row.startMessageSent ? 'Yes' : 'No')}
               ${field('Late First Stop', row.lateFirstStop ? 'Yes' : 'No')}
-              ${field('Issues', row.issues || 'None')}
+              ${recapHides("issues") ? "" : field('Issues', row.issues || 'None')}
             </div>
           </article>
         `;
@@ -5246,13 +5261,13 @@ function renderRecapRow(row, index, editable) {
       <td>${editable ? renderSelectControl(row, "solo", ["Solo 1", "Solo 5"]) : `<span class="pill blue">${escapeHtml(row.solo)}</span>`}</td>
       <td class="${missing.includes("truck") ? "cell-required" : ""}">${control("truck")}</td>
       <td class="${missing.includes("fuel") ? "cell-required" : ""}">${control("fuel")}</td>
-      <td class="${missing.includes("onDuty") ? "cell-required" : ""}">${control("onDuty")}</td>
+      ${recapHides("onDuty") ? "" : `<td class="${missing.includes("onDuty") ? "cell-required" : ""}">${control("onDuty")}</td>`}
       <td>${control("requestedStart")}</td>
       <td>${control("stopOneupcoming")}</td>
       <td>${control("scheduledFinal")}</td>
       <td class="start-msg-cell">${editable ? `<input class="toggle" type="checkbox" data-recap-field="startMessageSent" data-recap-id="${row.id}" ${row.startMessageSent ? "checked" : ""} />` : row.startMessageSent ? `<span class="pill green">Sent</span>` : `<span class="pill gray">No</span>`}</td>
       <td>${editable ? `<input class="toggle" type="checkbox" data-recap-field="lateFirstStop" data-recap-id="${row.id}" ${row.lateFirstStop ? "checked" : ""} />` : row.lateFirstStop ? `<span class="pill red">Yes</span>` : `<span class="pill gray">No</span>`}</td>
-      <td class="recap-issues-cell ${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control issues-box" rows="4" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>
+      ${recapHides("issues") ? "" : `<td class="recap-issues-cell ${row.issues ? "" : "cell-required"}">${editable ? `<textarea class="table-control issues-box" rows="4" data-recap-field="issues" data-recap-id="${row.id}">${escapeHtml(row.issues)}</textarea>` : `<span class="compact">${escapeHtml(row.issues || "No comments")}</span>`}</td>`}
       <td>${editable ? messageButtons : "—"}</td>
       <td>${editable ? `<button class="btn btn-danger btn-small" type="button" data-action="recap-delete-row" data-recap-id="${row.id}">Delete</button>` : ""}</td>
     </tr>
@@ -5284,7 +5299,9 @@ function renderRecapRow(row, index, editable) {
   }
 
   function missingRequired(row) {
-    return ["truck", "fuel", "onDuty"].filter((field) => !String(row[field] || "").trim());
+    return ["truck", "fuel", "onDuty"]
+      .filter((field) => !recapHides(field))
+      .filter((field) => !String(row[field] || "").trim());
   }
 
   function renderStatusPill(status) {
@@ -5520,14 +5537,14 @@ ${lowFuelLine}
       ["Solo", (r) => r.solo, ""],
       ["Truck", (r) => r.truck, ""],
       ["Fuel", (r) => r.fuel, ""],
-      ["On Duty", (r) => r.onDuty, ""],
       ["Requested Start", (r) => r.requestedStart, ""],
       ["Stop 1", (r) => r.stopOneupcoming, ""],
       ["Scheduled Final", (r) => r.scheduledFinal, ""],
       ["Start Msg Sent", (r) => (r.startMessageSent ? "Yes" : "No"), "col-num"],
       ["Late 1st?", (r) => (r.lateFirstStop ? "Yes" : "No"), "col-num"],
-      ["Issues / Comments", (r) => r.issues, "wrap col-issues"],
     ];
+    if (!recapHides("onDuty")) cols.splice(9, 0, ["On Duty", (r) => r.onDuty, ""]);
+    if (!recapHides("issues")) cols.push(["Issues / Comments", (r) => r.issues, "wrap col-issues"]);
     const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const head = cols.map(([label, , cls]) => `<th class="${cls}">${esc(label)}</th>`).join("");
     const body = rows
