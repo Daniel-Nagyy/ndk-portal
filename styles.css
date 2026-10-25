@@ -5045,6 +5045,14 @@ textarea.table-control {
   border: 1px solid var(--line, #2b3444); border-radius: 8px;
 }
 .slot-btn:hover { border-color: #1f6feb; color: #58a6ff; }
+.slot-import-btn { cursor: pointer; margin-top: 2px; }
+.slot-import-btn.is-busy { opacity: .6; cursor: progress; }
+.slot-import-note {
+  margin: 10px 0 0; padding: 8px 12px; border-radius: 6px;
+  font-size: 12px; border: 1px solid transparent;
+}
+.slot-import-note.ok { background: #0d2a16; border-color: #1f6f3f; color: #7ee2a8; }
+.slot-import-note.bad { background: #2a0f12; border-color: #7a2630; color: #ff9aa5; }
 
 .slot-results {
   background: var(--panel, #161b22);

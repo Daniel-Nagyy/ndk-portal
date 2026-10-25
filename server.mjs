@@ -19,8 +19,9 @@ import {
   listDrivers, getDriverById, upsertDriver, deleteDriver,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey,
-  driverSlotOptions, driverSlotMatches, driverSlotHistory, saveDriverShifts
+  driverSlotOptions, driverSlotMatches, driverSlotHistory, saveDriverShifts, clearDriverShifts
 } from './db.mjs';
+import { blocksFromCsvs } from './trips-import.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
 
 // Per-account dedupe for live extension alerts (accountId:dedupeKey -> lastSentMs).
@@ -790,6 +791,61 @@ const requestHandler = (req, res) => {  // CORS Headers
       driver: url.searchParams.get('driver') || '',
     });
     sendJson(200, { success: true, drivers, start, startSpan });
+    return;
+  }
+
+  // Refresh the history from Relay "Trips" exports. The CSVs live on a
+  // dispatcher's laptop and a hosted container cannot reach them, so the
+  // files come up through the browser. Same gate as the rest of the page:
+  // a Triple J dispatcher and nobody else.
+  if (url.pathname === '/api/driver-slots/import' && req.method === 'POST') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
+        const accountId = slotAccountFor(authUser, url.searchParams.get('accountId'));
+        if (!accountId) return sendJson(403, { success: false, error: 'Driver Slots is not enabled for this account' });
+
+        // Each export is well under a megabyte; this only stops a runaway body.
+        const MAX_BYTES = 40 * 1024 * 1024;
+        const body = await new Promise((resolve, reject) => {
+          let text = '';
+          let size = 0;
+          req.on('data', (chunk) => {
+            size += chunk.length;
+            if (size > MAX_BYTES) {
+              reject(new Error('Upload too large. Send fewer files at a time.'));
+              req.destroy();
+              return;
+            }
+            text += chunk.toString();
+          });
+          req.on('end', () => { try { resolve(text ? JSON.parse(text) : {}); } catch (e) { reject(e); } });
+          req.on('error', reject);
+        });
+
+        const files = Array.isArray(body.files) ? body.files.filter((f) => f && typeof f.text === 'string') : [];
+        if (!files.length) return sendJson(400, { success: false, error: 'No CSV files received' });
+
+        const { rows, stats } = blocksFromCsvs(files, {
+          accountId,
+          carrier: (body.carrier || '').trim(),
+          since: (body.since || '').trim(),
+        });
+        if (!rows.length) {
+          return sendJson(200, {
+            success: false,
+            error: 'No usable rows. Every shift was unnamed, filtered out by carrier, or had no date.',
+            stats,
+          });
+        }
+        const cleared = body.replace ? clearDriverShifts(accountId) : 0;
+        saveDriverShifts(rows);
+        sendJson(200, { success: true, cleared, stats, ...driverSlotOptions(accountId) });
+      } catch (error) {
+        sendJson(400, { success: false, error: simplifyError(error) });
+      }
+    })();
     return;
   }
 

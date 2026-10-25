@@ -1284,6 +1284,56 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   }
   const slotFilters = { weekday: "", domicile: "", start: "", startSpan: "120", driver: "" };
 
+  // Refreshing the history. Relay exports sit on a dispatcher's laptop and the
+  // hosted container cannot reach them, so the CSVs come up through the
+  // browser. Shifts are keyed on slot and date, so re-sending a week that is
+  // already stored updates those rows rather than counting them twice.
+  let slotImporting = false;
+  let slotImportNote = null;
+
+  async function importSlotCsvs(fileList) {
+    const chosen = [...fileList];
+    if (!chosen.length) return;
+    slotImporting = true;
+    slotImportNote = null;
+    render();
+    try {
+      const files = await Promise.all(
+        chosen.map(async (file) => ({ name: file.name, text: await file.text() }))
+      );
+      const res = await fetch("/api/driver-slots/import", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files, carrier: "TJER" }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        slotImportNote = { ok: false, text: data.error || "Import failed." };
+      } else {
+        const st = data.stats || {};
+        const skipped = [];
+        if (st.unnamed) skipped.push(`${st.unnamed} with no driver name`);
+        if (st.otherCarrier) skipped.push(`${st.otherCarrier} from another carrier`);
+        slotImportNote = {
+          ok: true,
+          text: `Read ${st.imported} shift${st.imported === 1 ? "" : "s"} from ${chosen.length} file${chosen.length === 1 ? "" : "s"}`
+            + `${st.first ? `, ${st.first} to ${st.last}` : ""}.`
+            + (skipped.length ? ` Skipped ${skipped.join(" and ")}.` : ""),
+        };
+        slotOptions = data;
+        slotHistory.clear();
+        slotOpenDriver = null;
+        await loadSlotMatches();
+      }
+    } catch (e) {
+      slotImportNote = { ok: false, text: "Could not read those files." };
+    } finally {
+      slotImporting = false;
+      render();
+    }
+  }
+
   // Driver Slots is for Triple J dispatchers only for now. Owners never see it.
   // The server enforces this too; this only keeps it out of the menu.
   function canSeeDriverSlots(user) {
@@ -2411,8 +2461,15 @@ const parsed = parseNetradynePaste(text, clientId);
             ${options.shifts
               ? `<span class="slot-muted">${options.shifts} shifts · ${escapeHtml(options.first || "")} to ${escapeHtml(options.last || "")}</span>`
               : `<span class="slot-muted">no history loaded</span>`}
+            <label class="slot-btn slot-import-btn${slotImporting ? " is-busy" : ""}">
+              ${slotImporting ? "Reading…" : "Update from Relay CSVs"}
+              <input type="file" accept=".csv,text/csv" multiple hidden data-slot-upload ${slotImporting ? "disabled" : ""} />
+            </label>
           </div>
         </header>
+        ${slotImportNote
+          ? `<p class="slot-import-note${slotImportNote.ok ? " ok" : " bad"}">${escapeHtml(slotImportNote.text)}</p>`
+          : ""}
 
         <section class="slot-filters">
           ${field("Day", select("weekday", [0, 1, 2, 3, 4, 5, 6], (v) => SLOT_DAYS[v], "Any day"))}
@@ -6984,6 +7041,14 @@ case "hos-close-filters":
   async function handleChange(event) {
     // Don't re-render on login view to avoid clearing form inputs
     if (currentView === "login") return;
+
+    const slotUpload = event.target.closest("[data-slot-upload]");
+    if (slotUpload) {
+      // importSlotCsvs copies the FileList before anything re-renders; reading
+      // it afterwards would find the list already emptied.
+      importSlotCsvs(slotUpload.files);
+      return;
+    }
 
     const slotFilter = event.target.closest("[data-slot-filter]");
     if (slotFilter) {
