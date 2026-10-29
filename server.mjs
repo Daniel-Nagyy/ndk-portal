@@ -416,6 +416,39 @@ const requestHandler = (req, res) => {  // CORS Headers
     //   GET /api/ingest/trucks-in-yard[?fuel=CNG]
     // Live Geotab positions decide "in the yard"; the Truck Tracker decides
     // which of those are active and what fuel they burn.
+    // Geotab HOS readiness for every driver on the account. Same rows as
+    // /api/drivers-readiness, but API-key authenticated: that endpoint needs a
+    // portal cookie, which an extension service worker cannot reliably send
+    // (the request is cross-site, so a SameSite session cookie is dropped).
+    // The extension's reset watch reads this.
+    //   GET /api/ingest/drivers-readiness
+    if (iurl.pathname === '/api/ingest/drivers-readiness' && req.method === 'GET') {
+      (async () => {
+        try {
+          const key = req.headers['x-api-key'] || iurl.searchParams.get('apiKey');
+          const acct = getAccountByApiKey(key);
+          if (!acct) return sendJson(401, { success: false, error: 'Invalid or missing API key' });
+
+          const creds = getAccountCredentials(acct.id);
+          if (!creds || !creds.geotab.database || !creds.geotab.username) {
+            return sendJson(400, { success: false, error: 'No Geotab credentials for this account' });
+          }
+
+          const result = await computeReadiness(creds.geotab);
+          return sendJson(200, {
+            success: true,
+            account: acct.id,
+            generatedAt: result.generatedAt,
+            totalDrivers: result.totalDrivers,
+            drivers: result.drivers
+          });
+        } catch (error) {
+          sendJson(500, { success: false, error: simplifyError(error) });
+        }
+      })();
+      return;
+    }
+
     if (iurl.pathname === '/api/ingest/trucks-in-yard' && req.method === 'GET') {
       (async () => {
         try {
