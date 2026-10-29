@@ -5034,6 +5034,11 @@ function renderRecapPage(user) {
       </div>
       <div class="actions-row">
         ${renderRecapTabs(user)}
+        ${tripleJRecapRowsForDay(user).length ? `
+          <button class="btn btn-secondary" type="button" data-action="copy-all-triplej-confirmations">
+            Copy all confirmations
+          </button>
+        ` : ""}
         <button class="btn btn-secondary" type="button" data-action="recap-print">Export / Print</button>
       </div>
     </div>
@@ -6918,6 +6923,10 @@ case "hos-close-filters":
   hosFiltersOpen = false;
   render();
   break;
+      case "copy-all-triplej-confirmations":
+        copyAllTripleJConfirmations(user);
+        break;
+
       case "copy-triplej-tour-reminder":
         copyTripleJTourReminder(action.dataset.recapId);
         break;
@@ -8080,6 +8089,60 @@ function copyTripleJTourReminder(recapId) {
   copyRecapMessageText(
     makeTripleJTourReminderMessage(row),
     "Tour reminder copied."
+  );
+}
+
+// Every Triple J row saved for the selected day, in the order a dispatcher would
+// work them: earliest tour first. Deliberately NOT visibleRecaps() -- that applies
+// the search box and the filter tabs, and "copy all for the day" has to mean the
+// whole day or the count in the toast cannot be trusted.
+function tripleJRecapRowsForDay(user) {
+  return state.recaps
+    .filter((row) =>
+      row.dailyDate === selectedRecapDate &&
+      canSeeClient(user, row.clientId) &&
+      isTripleJClient(row.clientId)
+    )
+    .sort((a, b) => {
+      const key = (row) =>
+        String(row.tripDate || row.stopOneupcoming || row.requestedStart || "");
+      return key(a).localeCompare(key(b)) ||
+        String(a.driverAssigned || "").localeCompare(String(b.driverAssigned || ""));
+    });
+}
+
+function copyAllTripleJConfirmations(user) {
+  const rows = tripleJRecapRowsForDay(user);
+
+  if (!rows.length) {
+    showToast("No rows saved for this day yet.");
+    return;
+  }
+
+  // A row with no driver yields "Hello -," which is not a sendable message, so it
+  // is skipped and reported rather than padding the count.
+  const named = rows.filter((row) => String(row.driverAssigned || "").trim());
+  const skipped = rows.length - named.length;
+
+  if (!named.length) {
+    showToast(`No drivers assigned yet - ${skipped} row(s) have no driver.`);
+    return;
+  }
+
+  // Numbered name headers and a divider: the messages are multi-line, so without
+  // them one paste is an unreadable wall and you cannot tell where one ends.
+  const block = named
+    .map((row, index) =>
+      `${index + 1}. ${String(row.driverAssigned).trim()}
+${makeTripleJTourReminderMessage(row)}`
+    )
+    .join("\n\n----------------------------------------\n\n");
+
+  const count = `Copied ${named.length} confirmation message${named.length === 1 ? "" : "s"}`;
+
+  copyRecapMessageText(
+    block,
+    skipped ? `${count} - skipped ${skipped} with no driver.` : `${count}.`
   );
 }
 
