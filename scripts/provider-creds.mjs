@@ -3,17 +3,32 @@
 // (railway ssh), where DB_PATH points at the production database.
 //
 //   node scripts/provider-creds.mjs status
-//   node scripts/provider-creds.mjs set <accountId> geotab    <password>
-//   node scripts/provider-creds.mjs set <accountId> netradyne <password>
+//   node scripts/provider-creds.mjs set <accountId> geotab    <password> [--username=<user>]
+//   node scripts/provider-creds.mjs set <accountId> netradyne <password> [--email=<login>]
 //   node scripts/provider-creds.mjs unblock <accountId> [geotab|netradyne]
 //
 // "set" also clears that provider's block, so polling resumes immediately.
+//
+// The login identifier (--email / --username) only has to be given the first
+// time an account's provider is configured, or when it changes; otherwise the
+// stored one is kept. A password alone is not enough for an account that has
+// never had a login set -- the poller needs both, so "set" refuses rather than
+// storing half a credential that fails on the next cycle and trips the breaker.
 import {
   listAccounts, getAccount, getAccountCredentials, updateAccount,
   listAuthFailures, clearAuthFailure, AUTH_FAIL_LIMIT,
 } from "../db.mjs";
 
-const [cmd, accountId, provider, password] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+// Pull the --flags out first so they can sit anywhere after the command.
+const flags = {};
+const positional = [];
+for (const arg of argv) {
+  const match = /^--([a-z]+)=(.*)$/.exec(arg);
+  if (match) flags[match[1]] = match[2];
+  else positional.push(arg);
+}
+const [cmd, accountId, provider, password] = positional;
 const PROVIDERS = ["geotab", "netradyne"];
 
 // The Geotab breaker is keyed by the credential triple, not the account id.
@@ -25,8 +40,12 @@ function usage(msg) {
   if (msg) console.error(`Error: ${msg}\n`);
   console.error(`Usage:
   node scripts/provider-creds.mjs status
-  node scripts/provider-creds.mjs set <accountId> <geotab|netradyne> <password>
+  node scripts/provider-creds.mjs set <accountId> geotab    <password> [--username=<user>]
+  node scripts/provider-creds.mjs set <accountId> netradyne <password> [--email=<login>]
   node scripts/provider-creds.mjs unblock <accountId> [geotab|netradyne]
+
+Quote the password in single quotes -- characters like < % $ ! are shell syntax
+otherwise, and a mangled password counts as a rejected login.
 
 Accounts: ${listAccounts().map((a) => a.id).join(", ") || "(none)"}`);
   process.exit(1);
@@ -64,10 +83,42 @@ if (cmd === "set") {
   if (!account) usage(`no account with id "${accountId}"`);
   const before = getAccountCredentials(accountId);
 
-  updateAccount(accountId, provider === "geotab" ? { geotabPassword: password } : { netradynePassword: password });
-  clearAuthFailure(provider, provider === "geotab" ? geotabRef(before) : accountId);
+  const isGeotab = provider === "geotab";
+  const loginFlag = isGeotab ? "username" : "email";
+  const login = flags[loginFlag];
+  const storedLogin = isGeotab ? before.geotab.username : before.netradyne.email;
 
+  if (flags[isGeotab ? "email" : "username"]) {
+    usage(`${provider} takes --${loginFlag}=, not --${isGeotab ? "email" : "username"}=`);
+  }
+  // Refuse a password-only set on an account that has no login stored. Saving
+  // one half of a credential leaves the poller guaranteed to fail, and two
+  // failures trip the circuit breaker -- which is what locks a real account out.
+  if (!login && !storedLogin) {
+    usage(
+      `${account.name} has no ${provider} ${loginFlag} stored, so a password alone cannot work.\n`
+      + `  Pass it: node scripts/provider-creds.mjs set ${accountId} ${provider} '<password>' --${loginFlag}=<value>`
+    );
+  }
+
+  const update = isGeotab ? { geotabPassword: password } : { netradynePassword: password };
+  if (login) {
+    if (isGeotab) update.geotabUsername = login;
+    else update.netradyneEmail = login;
+  }
+
+  updateAccount(accountId, update);
+  // Clear the breaker AFTER the write, and for geotab against the ref the
+  // failures were recorded under (the pre-update triple), not the new one.
+  clearAuthFailure(provider, isGeotab ? geotabRef(before) : accountId);
+  if (isGeotab && login && login !== storedLogin) {
+    // A changed username means a different breaker key; clear the new one too.
+    clearAuthFailure(provider, geotabRef(getAccountCredentials(accountId)));
+  }
+
+  const changedLogin = login && login !== storedLogin;
   console.log(`${provider} password updated for ${account.name} (${accountId}); login block cleared.`);
+  console.log(`   ${loginFlag}: ${login || storedLogin}${changedLogin ? " (changed)" : " (unchanged)"}`);
   console.log("Polling retries on the next cycle. Verify with scripts/verify-geotab.mjs or verify-netradyne.mjs.");
   process.exit(0);
 }
