@@ -388,6 +388,17 @@ export function driverSlotHistory(accountId, driverKey, limit = 60) {
     .all(...slotBaseArgs(accountId), String(driverKey || "").toLowerCase(), Number(limit) || 60);
 }
 
+// Shifts stored under the pre-fix key, which was "<operator id>|<date>" and
+// filed every leg of an overnight block as its own shift on the wrong day.
+// Current keys always carry "#<driver>", so anything without it is stale and
+// cannot be corrected in place -- the rows it should have been are different
+// rows. Cleared on import so the fixed data does not sit next to the bad.
+export function clearLegacyDriverShifts(accountId) {
+  return db
+    .prepare("DELETE FROM driver_shifts WHERE account_id = ? AND block_id NOT LIKE '%#%'")
+    .run(accountId).changes;
+}
+
 export function clearDriverShifts(accountId) {
   return db.prepare("DELETE FROM driver_shifts WHERE account_id = ?").run(accountId).changes;
 }

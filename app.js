@@ -1315,11 +1315,20 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
         const skipped = [];
         if (st.unnamed) skipped.push(`${st.unnamed} with no driver name`);
         if (st.otherCarrier) skipped.push(`${st.otherCarrier} from another carrier`);
+        // Rows imported before the overnight-block fix were keyed per leg, so
+        // they invented shifts on the wrong day at the wrong time and cannot be
+        // corrected in place. They are dropped on import; say so out loud,
+        // because the only way back is re-importing the older exports.
+        const stale = Number(data.staleCleared || 0);
         slotImportNote = {
           ok: true,
           text: `Read ${st.imported} shift${st.imported === 1 ? "" : "s"} from ${chosen.length} file${chosen.length === 1 ? "" : "s"}`
             + `${st.first ? `, ${st.first} to ${st.last}` : ""}.`
-            + (skipped.length ? ` Skipped ${skipped.join(" and ")}.` : ""),
+            + (skipped.length ? ` Skipped ${skipped.join(" and ")}.` : "")
+            + (stale
+              ? ` Removed ${stale} shift${stale === 1 ? "" : "s"} imported before the overnight-block fix`
+                + " — re-upload your older exports to restore that history."
+              : ""),
         };
         slotOptions = data;
         slotHistory.clear();

@@ -19,7 +19,8 @@ import {
   listDrivers, getDriverById, upsertDriver, deleteDriver,
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey,
-  driverSlotOptions, driverSlotMatches, driverSlotHistory, saveDriverShifts, clearDriverShifts
+  driverSlotOptions, driverSlotMatches, driverSlotHistory, saveDriverShifts, clearDriverShifts,
+  clearLegacyDriverShifts
 } from './db.mjs';
 import { blocksFromCsvs } from './trips-import.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
@@ -874,8 +875,13 @@ const requestHandler = (req, res) => {  // CORS Headers
           });
         }
         const cleared = body.replace ? clearDriverShifts(accountId) : 0;
+        // Rows from before the overnight-block fix cannot be updated in place:
+        // they are keyed differently and describe shifts that never happened.
+        const staleCleared = clearLegacyDriverShifts(accountId);
         saveDriverShifts(rows);
-        sendJson(200, { success: true, cleared, stats, ...driverSlotOptions(accountId) });
+        sendJson(200, {
+          success: true, cleared, staleCleared, stats, ...driverSlotOptions(accountId)
+        });
       } catch (error) {
         sendJson(400, { success: false, error: simplifyError(error) });
       }

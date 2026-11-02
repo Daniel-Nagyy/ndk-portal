@@ -38,15 +38,22 @@ const toIsoDate = (value) => {
 const weekdayOf = (iso) => (new Date(`${iso}T12:00:00`).getDay() + 6) % 7;
 
 // Blocks start on the half hour: 07:30, 08:30 and so on. Trip-level exports
-// report the first trip's own time instead, which lands a few minutes either
-// side, so every start is snapped to the nearest half hour. 19:45 becomes
-// 19:30, and 00:10 becomes 23:30 the evening before rather than a time that
-// does not exist.
+// report the driver's first STOP ARRIVAL instead, which is always at or after
+// the block start -- he reports at the yard, then drives to it. So the block
+// start is the half hour at or before that arrival, never the one after it.
+//
+// This used to round to the NEAREST half hour, which pushed a 15:27 arrival up
+// to a 15:30 start: a block starting three minutes after the driver had
+// already arrived at his first stop. Every arrival in the second half of an
+// hour came out an hour late, so an afternoon slot read as the next one up.
+//
+// 19:45 becomes 19:30, 15:27 becomes 14:30, 14:30 stays 14:30, and 00:10
+// becomes 23:30 the evening before rather than a time that does not exist.
 export function normalizeStart(value) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
   if (!m) return "";
   const minutes = Number(m[1]) * 60 + Number(m[2]);
-  const snapped = Math.round((minutes - 30) / 60) * 60 + 30;
+  const snapped = Math.floor((minutes - 30) / 60) * 60 + 30;
   const wrapped = ((snapped % (24 * 60)) + 24 * 60) % (24 * 60);
   return `${String(Math.floor(wrapped / 60)).padStart(2, "0")}:30`;
 }
@@ -58,11 +65,28 @@ export function normalizeStart(value) {
 // field on block rows in some exports and on trip rows in others, so any row
 // carrying one counts and the Block/Trip column is ignored.
 //
-// A shift is one slot on one day, keyed as "<operator id>|<date>". That is
-// what makes a trip-level export safe: a driver's eight trips that day are one
-// shift, not eight, and re-importing the same day from a different export
-// updates the row instead of adding another. Rows with no driver name are
-// counted and reported, never guessed at.
+// A shift is one BLOCK, and it starts at the earliest stop on that block.
+//
+// Relay's trip export writes one row per LEG, and the "Stop 1 ..." columns on
+// each row describe that leg's own origin -- not the block's first stop. A
+// block that runs past midnight therefore has legs dated the following day:
+//
+//   MGE45 -> MGE3                  10/27 14:45   <- the block really starts here
+//   MGE3  -> SOUTHEAS_30233        10/27 14:59
+//   SOUTHEAS_30233 -> GSP3         10/27 18:15
+//   GSP3  -> MGE5                  10/28 01:15
+//   MGE5  -> MGE45                 10/28 03:58
+//
+// Grouping those by each row's own date (the old "<operator id>|<date>" key)
+// invented a second shift on 10/28 starting at 01:15, and that phantom then
+// outranked the real 10/28 block starting 15:27, because the earliest time was
+// picked by comparing clock times with no date attached. A driver who works
+// afternoons showed up as working 01:30.
+//
+// So legs are grouped by Block ID and the start is the earliest full
+// DATE AND TIME, which is also what the driver_shifts primary key has always
+// expected. Re-importing the same block updates the row instead of adding one.
+// Rows with no driver name are counted and reported, never guessed at.
 export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
   const seen = new Map();
   const carriers = {};
@@ -79,7 +103,6 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
 
       const isoDate = toIsoDate(row["Stop 1 Planned Arrival Date"]);
       if (!isoDate) continue;
-      if (since && isoDate < since) { skippedDate += 1; continue; }
 
       const driver = (row["Driver Name"] || "").replace(/\s+/g, " ").trim();
       if (!driver) { unnamed += 1; continue; }
@@ -92,15 +115,31 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
         continue;
       }
 
-      const key = `${operator}|${isoDate}`;
-      const rawStart = row["Stop 1 Planned Arrival Time"] || "";
-      const startTime = normalizeStart(rawStart);
+      // Block-level exports carry one row per block and still fill Block ID.
+      // The operator+date key is only a fallback for an export that omits it;
+      // it cannot span midnight correctly, which is why it is not the default.
+      //
+      // The driver is part of the key because a block can change hands partway
+      // through -- 43 of the 200 blocks in a typical week do. Keying on the
+      // block alone would file the whole thing under whoever drove the first
+      // leg and lose the other driver's shift completely. Each driver's shift
+      // starts at the first stop HE is on, not at the block's first stop.
+      const blockId = (row["Block ID"] || "").trim();
+      const driverKey = driver.toLowerCase();
+      const key = `${blockId || `${operator}|${isoDate}`}#${driverKey}`;
+
+      const rawTime = (row["Stop 1 Planned Arrival Time"] || "").trim();
+      // Sorts legs across a midnight boundary. A leg with no time must never
+      // win the comparison, so it sorts last rather than first.
+      const stamp = `${isoDate}T${rawTime || "99:99"}`;
+
       const existing = seen.get(key);
       if (existing) {
-        // Several trips on the same slot-day: the shift starts at the earliest.
-        if (rawStart && (!existing.start_raw || rawStart < existing.start_raw)) {
-          existing.start_raw = rawStart;
-          existing.start_time = startTime;
+        if (stamp < existing.stamp) {
+          existing.stamp = stamp;
+          existing.start_date = isoDate;
+          existing.weekday = weekdayOf(isoDate);
+          existing.start_time = normalizeStart(rawTime);
           existing.origin = row["Stop 1"] || existing.origin;
         }
         continue;
@@ -110,7 +149,7 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
         block_id: key,
         account_id: accountId,
         driver,
-        driver_key: driver.toLowerCase(),
+        driver_key: driverKey,
         operator_id: operator,
         carrier: rowCarrier,
         domicile: parts[1] || "",
@@ -119,16 +158,26 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
         shift_slot: (operator.match(/_(d\d)(?:_|$)/i) || [, ""])[1].toLowerCase(),
         weekday: weekdayOf(isoDate),
         start_date: isoDate,
-        start_time: startTime,
-        start_raw: rawStart,
+        start_time: normalizeStart(rawTime),
         origin: row["Stop 1"] || "",
+        stamp,
       });
     }
   }
 
-  // start_raw is only used while picking the earliest trip of a slot-day; it is
-  // not a column, and passing it on would break the insert.
-  const rows = [...seen.values()].map(({ start_raw, ...row }) => row);
+  // `since` is applied to the block's own start, after grouping. Filtering legs
+  // first would keep the tail of a block that began before the cutoff and
+  // report it as a shift starting at whatever time that leg happened to run.
+  let grouped = [...seen.values()];
+  if (since) {
+    const before = grouped.length;
+    grouped = grouped.filter((row) => row.start_date >= since);
+    skippedDate = before - grouped.length;
+  }
+
+  // stamp only orders the legs while grouping; it is not a column, and passing
+  // it on would break the insert.
+  const rows = grouped.map(({ stamp, ...row }) => row);
   const dates = rows.map((r) => r.start_date).sort();
   const domiciles = {};
   for (const r of rows) domiciles[r.domicile || "?"] = (domiciles[r.domicile || "?"] || 0) + 1;
