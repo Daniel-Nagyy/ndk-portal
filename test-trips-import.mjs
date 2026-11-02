@@ -3,7 +3,7 @@
 // Relay's trip export writes one row per LEG. The fixtures below are the real
 // shape that broke Driver Slots: a block running past midnight, and a block
 // that changes drivers partway through.
-import { blocksFromCsvs, normalizeStart, parseCsv } from "./trips-import.mjs";
+import { blocksFromCsvs, normalizeStart, parseCsv, NON_SLOT_DRIVERS } from "./trips-import.mjs";
 
 let failed = 0;
 const ok = (label, cond) => {
@@ -101,15 +101,26 @@ const handoff = run([
   { block: "B-2MD", driver: "Collin Ndahiriwe", stop: "GSP3", date: "10/26/2026", time: "23:00" },
   { block: "B-2MD", driver: "Collin Ndahiriwe", stop: "AGS2", date: "10/27/2026", time: "01:45" },
 ]);
-ok("two shifts, one per driver", handoff.rows.length === 2);
-const kenno = handoff.rows.find((r) => r.driver === "Kenno Clark");
+// Kenno Clark is a yard jockey, not a slot driver, so his leg is dropped and
+// the block belongs to the driver who actually ran it.
+ok("one shift, the yard jockey dropped", handoff.rows.length === 1);
 const collin = handoff.rows.find((r) => r.driver === "Collin Ndahiriwe");
-ok("the first driver is not lost", Boolean(kenno));
-eq("first driver starts at the block's first stop", kenno.start_time, "12:30");
-eq("second driver starts at HIS first stop", collin.start_time, "12:30");
-eq("second driver's origin is where he joined", collin.origin, "MGE1");
-eq("second driver's shift is dated the 26th", collin.start_date, "2026-10-26");
-ok("the two have different keys", kenno.block_id !== collin.block_id);
+ok("the real driver survives", Boolean(collin));
+ok("the yard jockey gets no shift", !handoff.rows.some((r) => r.driver === "Kenno Clark"));
+eq("the dropped leg is counted", handoff.stats.nonSlot, 1);
+eq("the real driver starts at HIS first stop", collin.start_time, "12:30");
+eq("his origin is where he joined", collin.origin, "MGE1");
+eq("his shift is dated the 26th", collin.start_date, "2026-10-26");
+
+console.log("\n--- a genuine handoff between two real drivers keeps both");
+const twoReal = run([
+  { block: "B-REAL", driver: "Alice Adams", stop: "MGE45", date: "10/26/2026", time: "12:45" },
+  { block: "B-REAL", driver: "Bob Brown", stop: "MGE1", date: "10/26/2026", time: "17:04" },
+]);
+ok("two shifts", twoReal.rows.length === 2);
+eq("first driver kept", twoReal.rows.find((r) => r.driver === "Alice Adams").start_time, "12:30");
+eq("second driver kept", twoReal.rows.find((r) => r.driver === "Bob Brown").start_time, "16:30");
+ok("different keys", twoReal.rows[0].block_id !== twoReal.rows[1].block_id);
 
 // ---------------------------------------------------------------------------
 console.log("\n--- re-importing is idempotent");
@@ -168,6 +179,49 @@ eq("domicile parsed", mixed.rows[0].domicile, "MGE");
 console.log("\n--- quoted fields still parse");
 const quoted = parseCsv('Block ID,Driver Name\n"B-1","Smith, John"');
 eq("comma inside quotes", quoted[0]["Driver Name"], "Smith, John");
+
+// ---------------------------------------------------------------------------
+console.log("\n--- yard and shuttle drivers are kept out");
+ok("Kenno Clark is on the list", NON_SLOT_DRIVERS.has("kenno clark"));
+
+const onlyJockey = run([
+  { block: "B-J", driver: "Kenno Clark", date: "10/26/2026", time: "12:45" },
+]);
+ok("a block with nobody but a yard jockey yields no shift", onlyJockey.rows.length === 0);
+eq("and the leg is counted", onlyJockey.stats.nonSlot, 1);
+
+const caseAndSpace = run([
+  { block: "B-C", driver: "KENNO   CLARK", date: "10/26/2026", time: "12:45" },
+  { block: "B-C", driver: "Real Driver", date: "10/26/2026", time: "13:45" },
+]);
+ok("matching ignores case and extra spaces", caseAndSpace.rows.length === 1);
+eq("the real driver is the one kept", caseAndSpace.rows[0].driver, "Real Driver");
+
+console.log("\n--- a leg naming two drivers");
+// One tractor with two people on it is not a driver called "A;B".
+const pair = run([
+  { block: "B-P", driver: "Michael Moore;Kenno Clark", stop: "MGE5", date: "10/24/2026", time: "21:45" },
+  { block: "B-P", driver: "Michael Moore", stop: "MGE1", date: "10/25/2026", time: "02:00" },
+]);
+ok("no driver is called \"A;B\"", !pair.rows.some((r) => r.driver.includes(";")));
+ok("it folds into the real driver's own shift", pair.rows.length === 1);
+eq("named properly", pair.rows[0].driver, "Michael Moore");
+eq("and starts at the pair leg, which he was on", pair.rows[0].start_time, "21:30");
+eq("the excluded half is counted", pair.stats.nonSlot, 1);
+
+const team = run([
+  { block: "B-T", driver: "Alice Adams;Bob Brown", stop: "MGE5", date: "10/24/2026", time: "21:45" },
+]);
+ok("a real team gives each driver a shift", team.rows.length === 2);
+ok("both named", team.rows.map((r) => r.driver).sort().join("|") === "Alice Adams|Bob Brown");
+
+console.log("\n--- the exclusion list can be overridden per call");
+const overridden = run([
+  { block: "B-O", driver: "Kenno Clark", date: "10/26/2026", time: "12:45" },
+  { block: "B-O2", driver: "Someone Else", date: "10/26/2026", time: "12:45" },
+], { exclude: ["someone else"] });
+ok("the override replaces the default list", overridden.rows.length === 1);
+eq("so Kenno comes back when asked for", overridden.rows[0].driver, "Kenno Clark");
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exitCode = failed ? 1 : 0;

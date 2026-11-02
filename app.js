@@ -1315,6 +1315,7 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
         const skipped = [];
         if (st.unnamed) skipped.push(`${st.unnamed} with no driver name`);
         if (st.otherCarrier) skipped.push(`${st.otherCarrier} from another carrier`);
+        if (st.nonSlot) skipped.push(`${st.nonSlot} from yard/shuttle drivers`);
         // Rows imported before the overnight-block fix were keyed per leg, so
         // they invented shifts on the wrong day at the wrong time and cannot be
         // corrected in place. They are dropped on import; say so out loud,

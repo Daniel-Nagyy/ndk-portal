@@ -30,6 +30,21 @@ export function parseCsv(text) {
     .map((r) => Object.fromEntries(header.map((h, i) => [h, (r[i] ?? "").trim()])));
 }
 
+// Names that appear on blocks but do not work slots: yard jockeys, hostlers
+// and shuttle drivers, who move a tractor one leg and hand it to the driver who
+// actually runs the block. They turn up on many blocks a day, always alongside
+// someone else, and listing them in Driver Slots makes it look as though a slot
+// is covered when it is not.
+//
+// Kenno Clark: 20 blocks in nine days, 8 of them on 10/26 alone, every single
+// one shared with another driver and never one he ran on his own.
+//
+// Lower case, matched against the driver name with runs of whitespace
+// collapsed. Add a name here to keep it out of Driver Slots entirely.
+export const NON_SLOT_DRIVERS = new Set([
+  "kenno clark",
+]);
+
 const toIsoDate = (value) => {
   const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value || "");
   return m ? `${m[3]}-${m[1]}-${m[2]}` : null;
@@ -87,13 +102,17 @@ export function normalizeStart(value) {
 // DATE AND TIME, which is also what the driver_shifts primary key has always
 // expected. Re-importing the same block updates the row instead of adding one.
 // Rows with no driver name are counted and reported, never guessed at.
-export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
+export function blocksFromCsvs(files, { accountId, carrier, since, exclude } = {}) {
+  const skipDrivers = exclude
+    ? new Set([...exclude].map((n) => String(n).toLowerCase().replace(/\s+/g, " ").trim()))
+    : NON_SLOT_DRIVERS;
   const seen = new Map();
   const carriers = {};
   let unnamed = 0;
   let otherCarrier = 0;
   let skippedDate = 0;
   let slotRows = 0;
+  let nonSlot = 0;
 
   for (const file of files) {
     for (const row of parseCsv(file.text || "")) {
@@ -104,8 +123,21 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
       const isoDate = toIsoDate(row["Stop 1 Planned Arrival Date"]);
       if (!isoDate) continue;
 
-      const driver = (row["Driver Name"] || "").replace(/\s+/g, " ").trim();
-      if (!driver) { unnamed += 1; continue; }
+      // A leg occasionally names two people ("Michael Moore;Kenno Clark"), which
+      // is one tractor with two drivers on it, not a driver called that. Split
+      // them so each is credited, and so an excluded name inside a pair is
+      // still excluded instead of smuggling itself in as a new driver.
+      const legDrivers = (row["Driver Name"] || "")
+        .split(";")
+        .map((name) => name.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      if (!legDrivers.length) { unnamed += 1; continue; }
+
+      // Dropping the leg is enough: each driver's shift is keyed separately, so
+      // the block still produces a shift for whoever actually ran it.
+      const drivers = legDrivers.filter((name) => !skipDrivers.has(name.toLowerCase()));
+      nonSlot += legDrivers.length - drivers.length;
+      if (!drivers.length) continue;
 
       const parts = operator.split("_");
       const rowCarrier = parts[0] || "";
@@ -125,43 +157,45 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
       // leg and lose the other driver's shift completely. Each driver's shift
       // starts at the first stop HE is on, not at the block's first stop.
       const blockId = (row["Block ID"] || "").trim();
-      const driverKey = driver.toLowerCase();
-      const key = `${blockId || `${operator}|${isoDate}`}#${driverKey}`;
-
       const rawTime = (row["Stop 1 Planned Arrival Time"] || "").trim();
       // Sorts legs across a midnight boundary. A leg with no time must never
       // win the comparison, so it sorts last rather than first.
       const stamp = `${isoDate}T${rawTime || "99:99"}`;
 
-      const existing = seen.get(key);
-      if (existing) {
-        if (stamp < existing.stamp) {
-          existing.stamp = stamp;
-          existing.start_date = isoDate;
-          existing.weekday = weekdayOf(isoDate);
-          existing.start_time = normalizeStart(rawTime);
-          existing.origin = row["Stop 1"] || existing.origin;
-        }
-        continue;
-      }
+      for (const driver of drivers) {
+        const driverKey = driver.toLowerCase();
+        const key = `${blockId || `${operator}|${isoDate}`}#${driverKey}`;
 
-      seen.set(key, {
-        block_id: key,
-        account_id: accountId,
-        driver,
-        driver_key: driverKey,
-        operator_id: operator,
-        carrier: rowCarrier,
-        domicile: parts[1] || "",
-        solo: (operator.match(/Solo\d+/i) || [""])[0],
-        tractor: (operator.match(/Tractor[_ ]?(\d+)/i) || [, ""])[1] || "",
-        shift_slot: (operator.match(/_(d\d)(?:_|$)/i) || [, ""])[1].toLowerCase(),
-        weekday: weekdayOf(isoDate),
-        start_date: isoDate,
-        start_time: normalizeStart(rawTime),
-        origin: row["Stop 1"] || "",
-        stamp,
-      });
+        const existing = seen.get(key);
+        if (existing) {
+          if (stamp < existing.stamp) {
+            existing.stamp = stamp;
+            existing.start_date = isoDate;
+            existing.weekday = weekdayOf(isoDate);
+            existing.start_time = normalizeStart(rawTime);
+            existing.origin = row["Stop 1"] || existing.origin;
+          }
+          continue;
+        }
+
+        seen.set(key, {
+          block_id: key,
+          account_id: accountId,
+          driver,
+          driver_key: driverKey,
+          operator_id: operator,
+          carrier: rowCarrier,
+          domicile: parts[1] || "",
+          solo: (operator.match(/Solo\d+/i) || [""])[0],
+          tractor: (operator.match(/Tractor[_ ]?(\d+)/i) || [, ""])[1] || "",
+          shift_slot: (operator.match(/_(d\d)(?:_|$)/i) || [, ""])[1].toLowerCase(),
+          weekday: weekdayOf(isoDate),
+          start_date: isoDate,
+          start_time: normalizeStart(rawTime),
+          origin: row["Stop 1"] || "",
+          stamp,
+        });
+      }
     }
   }
 
@@ -190,6 +224,7 @@ export function blocksFromCsvs(files, { accountId, carrier, since } = {}) {
       imported: rows.length,
       unnamed,
       otherCarrier,
+      nonSlot,
       skippedDate,
       first: dates[0] || null,
       last: dates[dates.length - 1] || null,
