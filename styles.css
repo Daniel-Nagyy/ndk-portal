@@ -5210,3 +5210,10 @@ tr:has(.hos-badge-short) { background: rgba(255, 77, 94, .07); }
 }
 .hos-strip-bad  { background: #2a0f12; border-color: #7a2630; color: #ff9aa5; }
 .hos-strip-warn { background: #26231a; border-color: #6b5a22; color: #e2cc7e; }
+.hos-badge-done {
+  padding: 2px 7px; background: transparent; border: 1px solid #23262c; color: #5b6069;
+}
+.hos-badge-note {
+  display: block; margin-top: 4px; padding: 2px 7px;
+  background: #26231a; border: 1px solid #6b5a22; color: #e2cc7e;
+}

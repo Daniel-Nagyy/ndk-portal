@@ -17,7 +17,22 @@ export const VERDICT = {
   SHORT: "SHORT",       // matched, and provably cannot finish the block
   UNKNOWN: "UNKNOWN",   // no confident driver match, or no HOS data
   PARTIAL: "PARTIAL",   // matched, clocks fine, but the block length is unknown
+  DONE: "DONE",         // the block has already ended; nothing to warn about
 };
+
+// Where the block sits relative to now. The question to ask changes completely
+// between them, which is the whole reason this is time-aware:
+//
+//   upcoming — will the driver be legal when the block STARTS? A driver still
+//              on duty needs 10 hours off first, and that has to fit before the
+//              start time.
+//   running  — the driver is on the block now. Driving is expected, not a
+//              fault. The only question is whether the clocks reach the END.
+//   done     — the block is over. Say nothing.
+export const PHASE = { UPCOMING: "upcoming", RUNNING: "running", DONE: "done", UNSCHEDULED: "unscheduled" };
+
+const WORKING_STATUSES = new Set(["ON", "D", "YM"]);
+const RESET_MINUTES = 10 * 60;
 
 const DRIVE_LIMIT_MIN = 11 * 60;
 const SHIFT_LIMIT_MIN = 14 * 60;
@@ -108,6 +123,59 @@ export function blockMinutes(row = {}) {
   return span > 0 ? span : span + 24 * 60;
 }
 
+// --- when is the block? -----------------------------------------------------
+
+// Recap times are wall-clock in the operation's timezone; the container runs in
+// UTC. Resolving "2026-11-05 08:30 in America/New_York" to a real instant is
+// the difference between a correct phase and a five-hour error.
+export const PORTAL_TIMEZONE = process.env.PORTAL_TIMEZONE || "America/New_York";
+
+function zoneOffsetMs(ts, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    })
+      .formatToParts(new Date(ts))
+      .map((p) => [p.type, p.value])
+  );
+  const asUtc = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour) % 24, Number(parts.minute), Number(parts.second)
+  );
+  return asUtc - ts;
+}
+
+// Wall-clock date + HH:MM in a zone -> epoch ms. Applied twice so a time that
+// lands near a DST change is corrected with the offset actually in force.
+export function zonedToEpoch(dateIso, hhmm, timeZone = PORTAL_TIMEZONE) {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateIso || "").trim());
+  const minutes = toMinutes(hhmm);
+  if (!d || minutes == null) return null;
+  const naive = Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), 0, 0) + minutes * 60000;
+  let ts = naive;
+  for (let i = 0; i < 2; i += 1) ts = naive - zoneOffsetMs(ts, timeZone);
+  return ts;
+}
+
+// The block's real start and end instants, and which phase it is in.
+export function blockWindow(row = {}, { now = new Date(), timeZone = PORTAL_TIMEZONE } = {}) {
+  const span = blockMinutes(row);
+  const startTs = zonedToEpoch(row.dailyDate || row.tripDate, row.requestedStart, timeZone);
+  if (span == null || startTs == null) {
+    return { phase: PHASE.UNSCHEDULED, span, startTs: null, endTs: null, toStart: null, toEnd: null };
+  }
+  const endTs = startTs + span * 60000;
+  const nowTs = now instanceof Date ? now.getTime() : Number(now);
+  const phase = nowTs >= endTs ? PHASE.DONE : nowTs >= startTs ? PHASE.RUNNING : PHASE.UPCOMING;
+  return {
+    phase, span, startTs, endTs,
+    toStart: Math.round((startTs - nowTs) / 60000),
+    toEnd: Math.round((endTs - nowTs) / 60000),
+  };
+}
+
 // --- the verdict -----------------------------------------------------------
 
 function fmt(minutes) {
@@ -118,87 +186,126 @@ function fmt(minutes) {
 }
 
 // `row` is a recap row, `driver` a readiness record from geotab.mjs.
-export function coverageFor(row, driver, { now = new Date() } = {}) {
-  const need = blockMinutes(row);
+//
+// Returns { verdict, block, reasons, notes, detail, signature }. `signature` is
+// a stable name for the problem ("running:drive,cycle") that does not move as
+// the clock ticks down, so the alert cooldown keys on it instead of on wording
+// that changes every poll.
+export function coverageFor(row, driver, { now = new Date(), timeZone } = {}) {
+  const win = blockWindow(row, { now, timeZone });
+  const need = win.span;
   const block = {
     minutes: need,
     display: need == null ? null : fmt(need),
     start: row.requestedStart || null,
     end: row.scheduledFinal || null,
+    phase: win.phase,
+    minutesToStart: win.toStart,
+    minutesToEnd: win.toEnd,
   };
+  const bare = (verdict, reasons = [], detail = null) => ({ verdict, block, reasons, notes: [], detail, signature: `${verdict.toLowerCase()}:` });
 
-  if (!driver) {
-    return { verdict: VERDICT.UNKNOWN, block, reasons: [], detail: null };
-  }
+  if (!driver) return bare(VERDICT.UNKNOWN);
   if (driver.readiness === "NO LOGS" || driver.readiness === "Error") {
-    return {
-      verdict: VERDICT.UNKNOWN,
-      block,
-      reasons: [driver.readiness === "Error" ? "Geotab returned an error for this driver" : "no duty logs in Geotab"],
-      detail: null,
-    };
+    return bare(VERDICT.UNKNOWN, [
+      driver.readiness === "Error" ? "Geotab returned an error for this driver" : "no duty logs in Geotab",
+    ]);
   }
 
   const detail = {
     driverName: driver.driverName || driver.name || "",
     status: driver.currentStatus || driver.status || null,
+    working: WORKING_STATUSES.has(driver.currentStatus || driver.status),
     resetComplete: driver.readiness === "READY",
     resetMinutesLeft: driver.minutesLeft ?? null,
     cycleMinutes: driver.cycleRemainingMinutes ?? null,
     driveMinutes: driver.drivingMinutes ?? null,
     shiftMinutes: driver.workdayMinutes ?? null,
+    phase: win.phase,
   };
 
-  const reasons = [];
+  // A block that has already finished is not a problem to report.
+  if (win.phase === PHASE.DONE) {
+    return { verdict: VERDICT.DONE, block, reasons: [], notes: [], detail, signature: "done:" };
+  }
 
-  // 1. The 10-hour reset. "NOT READY" covers both a rest still running and a
-  //    driver who is mid-shift and so has not reset at all; the two need
-  //    different wording or the dispatcher cannot tell what to do about it.
-  if (!detail.resetComplete) {
+  const reasons = [];
+  const notes = [];
+  const failing = [];
+
+  // True only when a reset is still AHEAD of the driver and will land before
+  // the block starts. In that case the drive and shift clocks Geotab reports
+  // now are stale — they will be back to 11h and 14h by the start, so checking
+  // today's partial values would flag a driver who is going to be fine.
+  //
+  // A driver who has ALREADY completed their reset is the opposite case: their
+  // current clocks are exactly the ones they will start with, so they must be
+  // checked.
+  let resetStillAhead = false;
+
+  if (win.phase === PHASE.UPCOMING && !detail.resetComplete) {
+    const toStart = win.toStart;
     if (detail.resetMinutesLeft != null && detail.resetMinutesLeft > 0) {
-      reasons.push(`10-hour reset not finished — ${fmt(detail.resetMinutesLeft)} still to go`);
+      // Resting now — does the rest finish before the block starts?
+      if (detail.resetMinutesLeft > toStart) {
+        reasons.push(
+          `10-hour reset needs ${fmt(detail.resetMinutesLeft)} more but the block starts in ${fmt(toStart)}`
+        );
+        failing.push("reset");
+      } else {
+        resetStillAhead = true;
+      }
+    } else if (RESET_MINUTES > toStart) {
+      // Still working, and a full 10 hours off no longer fits before the start.
+      reasons.push(
+        `still ${detail.status || "on duty"} — a 10-hour reset cannot finish before the ${row.requestedStart} start (${fmt(toStart)} away)`
+      );
+      failing.push("reset");
     } else {
-      reasons.push(`no 10-hour reset — currently ${detail.status || "on duty"}`);
+      // There is room, but only if they stop in time. Worth saying, not worth
+      // calling a failure: the driver has not broken anything yet.
+      resetStillAhead = true;
+      notes.push(`must go off duty within ${fmt(toStart - RESET_MINUTES)} to get a 10-hour reset before the start`);
     }
   }
 
-  // 2/3. Clocks against the block.
-  //
-  // Drive and shift are capped at their own legal maximums before comparing.
-  // A 12-hour block does not mean 12 hours of driving — the 11-hour limit makes
-  // that impossible for anyone — so comparing the raw block length against the
-  // drive clock would flag every long tour, including a driver who just came
-  // off a full reset. Capping asks the real question: has this driver got as
-  // much of that clock as the block could possibly consume? Cycle is not capped,
-  // because every minute of the block really does come off the cycle.
-  const clocks = [
-    ["cycle hours", detail.cycleMinutes, null],
-    ["drive time", detail.driveMinutes, DRIVE_LIMIT_MIN],
-    ["shift time", detail.shiftMinutes, SHIFT_LIMIT_MIN],
-  ];
-  for (const [label, left, cap] of clocks) {
+  // How much of the block is still ahead of the driver. Mid-block, only the
+  // remainder matters: hours already run are not a shortfall.
+  const remaining = win.phase === PHASE.RUNNING ? win.toEnd : need;
+
+  // Cycle is never restored by a 10-hour reset (only a 34-hour restart does
+  // that), so it is always checked against what is left to run.
+  const clocks = [["cycle hours", "cycle", detail.cycleMinutes, null]];
+  if (!(win.phase === PHASE.UPCOMING && resetStillAhead)) {
+    clocks.push(["drive time", "drive", detail.driveMinutes, DRIVE_LIMIT_MIN]);
+    clocks.push(["shift time", "shift", detail.shiftMinutes, SHIFT_LIMIT_MIN]);
+  }
+
+  const tail = win.phase === PHASE.RUNNING ? "to finish the block" : "for the block";
+  for (const [label, key, left, cap] of clocks) {
     if (left == null) continue;
     if (left <= 0) {
       reasons.push(`${label} exhausted`);
+      failing.push(key);
       continue;
     }
-    if (need == null) continue;
-    const required = cap == null ? need : Math.min(need, cap);
+    if (remaining == null) continue;
+    const required = cap == null ? remaining : Math.min(remaining, cap);
     if (left < required) {
-      reasons.push(`${label} ${fmt(left)} left, block needs ${fmt(required)}`);
+      reasons.push(`${label} ${fmt(left)} left, needs ${fmt(required)} ${tail}`);
+      failing.push(key);
     }
   }
 
-  if (reasons.length) return { verdict: VERDICT.SHORT, block, reasons, detail };
-  if (need == null) {
+  const signature = `${win.phase}:${failing.sort().join(",")}`;
+  if (reasons.length) return { verdict: VERDICT.SHORT, block, reasons, notes, detail, signature };
+  if (win.phase === PHASE.UNSCHEDULED) {
     return {
-      verdict: VERDICT.PARTIAL,
-      block,
-      reasons: ["block start or end time missing — clocks look fine but the block length could not be checked"],
-      detail,
+      verdict: VERDICT.PARTIAL, block, notes, detail, signature,
+      reasons: ["block start or end time missing — clocks look fine but the block could not be checked against them"],
     };
   }
-  return { verdict: VERDICT.OK, block, reasons: [], detail };
+  return { verdict: VERDICT.OK, block, reasons: [], notes, detail, signature };
 }
 
 // Verdicts for every row of a day's recap, keyed by row id.

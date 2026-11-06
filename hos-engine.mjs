@@ -101,9 +101,10 @@ async function alertOnRecapCoverage(account, readiness, now) {
     const result = coverage[row.id];
     if (!result || result.verdict !== VERDICT.SHORT) continue;
 
-    // One alert per driver per block per cooldown, not per reason, so a driver
-    // short on three clocks does not send three messages.
-    const key = `${account.id}:coverage:${row.id}:${result.reasons.join("|")}`;
+    // Keyed on the signature, not the wording. Mid-block the reason text holds
+    // a countdown that changes every poll, so keying on the text would defeat
+    // the cooldown entirely and alert every 60 seconds until the block ended.
+    const key = `${account.id}:coverage:${row.id}:${result.signature}`;
     if (now - (sentAt.get(key) || 0) < COVERAGE_COOLDOWN_MS) continue;
     sentAt.set(key, now);
 

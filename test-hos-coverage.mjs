@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import {
   VERDICT, normalizeName, buildDriverIndex, matchDriver,
-  blockMinutes, coverageFor, coverageForRows, coverageAlert,
+  blockMinutes, coverageFor as rawCoverageFor, coverageForRows as rawCoverageForRows,
+  coverageAlert, zonedToEpoch,
 } from "./hos-coverage.mjs";
 
 let pass = 0;
@@ -16,7 +17,12 @@ const ready = (over = {}) => ({
   minutesLeft: 0, cycleRemainingMinutes: 40 * 60, drivingMinutes: 11 * 60, workdayMinutes: 14 * 60,
   ...over,
 });
-const row = (over = {}) => ({ id: "r1", driverAssigned: "Steven Frederick", requestedStart: "08:30", scheduledFinal: "18:30", ...over });
+const DATE = "2026-11-05";
+// 06:00, so the 08:30 block is upcoming in every case below unless overridden.
+const NOW = new Date(zonedToEpoch(DATE, "06:00"));
+const coverageFor = (r, d, o = {}) => rawCoverageFor(r, d, { now: NOW, ...o });
+const coverageForRows = (rows, drivers, o = {}) => rawCoverageForRows(rows, drivers, { now: NOW, ...o });
+const row = (over = {}) => ({ id: "r1", dailyDate: DATE, driverAssigned: "Steven Frederick", requestedStart: "08:30", scheduledFinal: "18:30", ...over });
 
 // --- names ---
 test("normalizeName strips case and punctuation", () => {
@@ -69,26 +75,26 @@ test("no logs is UNKNOWN", () => {
   assert.equal(coverageFor(row(), ready({ readiness: "NO LOGS" })).verdict, VERDICT.UNKNOWN);
 });
 
-test("reset still running is SHORT and says how long is left", () => {
-  const r = coverageFor(row(), ready({ readiness: "NOT READY", minutesLeft: 150 }));
+test("reset still running past the block start is SHORT", () => {
+  const r = coverageFor(row(), ready({ readiness: "NOT READY", currentStatus: "SB", minutesLeft: 300 }));
   assert.equal(r.verdict, VERDICT.SHORT);
-  assert.match(r.reasons[0], /10-hour reset not finished.*2h 30m/);
+  assert.match(r.reasons[0], /needs 5h 00m more but the block starts in 2h 30m/);
 });
 
-test("driver mid-shift has had no reset at all", () => {
+test("driver still on duty with no room left to reset is SHORT", () => {
   const r = coverageFor(row(), ready({ readiness: "NOT READY", minutesLeft: null, currentStatus: "D" }));
   assert.equal(r.verdict, VERDICT.SHORT);
-  assert.match(r.reasons[0], /no 10-hour reset.*D/);
+  assert.match(r.reasons[0], /still D .* cannot finish before the 08:30 start/);
 });
 
 test("cycle shorter than the block is caught", () => {
   const r = coverageFor(row(), ready({ cycleRemainingMinutes: 5 * 60 }));
   assert.equal(r.verdict, VERDICT.SHORT);
-  assert.match(r.reasons[0], /cycle hours 5h 00m left, block needs 10h 00m/);
+  assert.match(r.reasons[0], /cycle hours 5h 00m left, needs 10h 00m for the block/);
 });
 
 test("cycle at zero is caught even without block times", () => {
-  const r = coverageFor(row({ scheduledFinal: "" }), ready({ cycleRemainingMinutes: 0 }));
+  const r = coverageFor(row({ scheduledFinal: "", requestedStart: "" }), ready({ cycleRemainingMinutes: 0 }));
   assert.equal(r.verdict, VERDICT.SHORT);
   assert.match(r.reasons[0], /cycle hours exhausted/);
 });
@@ -116,13 +122,13 @@ test("cycle is NOT capped — every block minute comes off it", () => {
   const long = row({ requestedStart: "06:30", scheduledFinal: "19:30" }); // 13h
   const r = coverageFor(long, ready({ cycleRemainingMinutes: 12 * 60 }));
   assert.equal(r.verdict, VERDICT.SHORT);
-  assert.match(r.reasons[0], /cycle hours 12h 00m left, block needs 13h 00m/);
+  assert.match(r.reasons[0], /cycle hours 12h 00m left, needs 13h 00m for the block/);
 });
 
 test("a short drive clock is still caught on a long block", () => {
   const long = row({ requestedStart: "06:30", scheduledFinal: "19:30" }); // 13h
   const r = coverageFor(long, ready({ drivingMinutes: 5 * 60 }));
-  assert.match(r.reasons.join(" "), /drive time 5h 00m left, block needs 11h 00m/);
+  assert.match(r.reasons.join(" "), /drive time 5h 00m left, needs 11h 00m for the block/);
 });
 
 test("generational suffixes still match", () => {
@@ -147,9 +153,9 @@ test("every failing clock is reported, not just the first", () => {
 });
 
 test("healthy clocks but no block times is PARTIAL, not OK", () => {
-  const r = coverageFor(row({ scheduledFinal: "" }), ready());
+  const r = coverageFor(row({ scheduledFinal: "", requestedStart: "" }), ready());
   assert.equal(r.verdict, VERDICT.PARTIAL);
-  assert.match(r.reasons[0], /block length could not be checked/);
+  assert.match(r.reasons[0], /could not be checked against them/);
 });
 
 test("a null clock is not treated as zero", () => {

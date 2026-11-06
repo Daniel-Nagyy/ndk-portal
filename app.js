@@ -1320,10 +1320,20 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     }
     if (result.verdict === "UNKNOWN") return `<span class="hos-badge hos-badge-unknown" title="${title}">HOS unknown</span>`;
     if (result.verdict === "PARTIAL") return `<span class="hos-badge hos-badge-partial" title="${title}">HOS ok · block length unchecked</span>`;
+    // A block that already ended gets no verdict at all. A green tick on
+    // yesterday's work would just be noise to scroll past.
+    if (result.verdict === "DONE") return `<span class="hos-badge hos-badge-done">block ended</span>`;
+
+    // "Must stop driving by X to be legal at the start" is not a failure — the
+    // driver has broken nothing — but it is the one thing a dispatcher can
+    // still act on, so it rides along with the OK.
+    const note = (result.notes || [])[0];
     const left = result.detail && result.detail.cycleMinutes != null
       ? ` ${Math.floor(result.detail.cycleMinutes / 60)}h cycle`
       : "";
-    return `<span class="hos-badge hos-badge-ok" title="${title}">✓ HOS${escapeHtml(left)}</span>`;
+    const running = result.block && result.block.phase === "running";
+    const ok = `<span class="hos-badge hos-badge-ok" title="${title}">✓ HOS${running ? " · on block" : escapeHtml(left)}</span>`;
+    return note ? `${ok}<span class="hos-badge hos-badge-note">⏳ ${escapeHtml(note)}</span>` : ok;
   }
 
   // Driver Slots dashboard: which drivers have worked a given slot before.
