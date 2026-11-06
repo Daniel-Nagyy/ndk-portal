@@ -62,11 +62,38 @@ test("mid-block, clocks are judged against what is LEFT, not the whole block", (
   assert.equal(r.verdict, VERDICT.OK, r.reasons.join(" | "));
 });
 
-test("mid-block driver who will run out before the end IS flagged", () => {
-  // 15:00, 3h30m to run, only 1h of drive left.
-  const r = coverageFor(row(), driving({ drivingMinutes: 60 }), { now: at("15:00") });
+// A tour that ends at 18:30 is not 3h30m of driving. The driver may be a drop
+// and a deadhead from finished, so a clock shorter than the remaining schedule
+// is not evidence of anything.
+test("mid-block driver is NOT measured against the time left on the schedule", () => {
+  // 15:00, 3h30m of schedule left, only 1h30m of drive. Not a failure.
+  const r = coverageFor(row(), driving({ drivingMinutes: 90 }), { now: at("15:00") });
+  assert.equal(r.verdict, VERDICT.OK, r.reasons.join(" | "));
+  assert.ok(!r.reasons.some((x) => /needs .* to finish/.test(x)), r.reasons.join(" | "));
+});
+
+test("a low clock mid-block is surfaced as a note, not a red failure", () => {
+  const r = coverageFor(row(), driving({ drivingMinutes: 40 }), { now: at("15:00") });
+  assert.equal(r.verdict, VERDICT.OK);
+  assert.match(r.notes.join(" "), /drive time down to 0h 40m/);
+});
+
+test("a clock actually at zero mid-block IS flagged", () => {
+  const r = coverageFor(row(), driving({ drivingMinutes: 0 }), { now: at("15:00") });
   assert.equal(r.verdict, VERDICT.SHORT);
-  assert.match(r.reasons.join(" "), /drive time 1h 00m left, needs 3h 30m to finish the block/);
+  assert.match(r.reasons[0], /drive time exhausted — driver is out of hours now/);
+});
+
+test("cycle exhausted mid-block is flagged too", () => {
+  const r = coverageFor(row(), driving({ cycleRemainingMinutes: 0 }), { now: at("15:00") });
+  assert.equal(r.verdict, VERDICT.SHORT);
+  assert.match(r.reasons[0], /cycle hours exhausted/);
+});
+
+test("a driver near the end of a long tour with little drive left is left alone", () => {
+  // 18:00 on an 08:30-18:30 block: 30 minutes of schedule left, 45 of drive.
+  const r = coverageFor(row(), driving({ drivingMinutes: 45, workdayMinutes: 70 }), { now: at("18:00") });
+  assert.equal(r.verdict, VERDICT.OK, r.reasons.join(" | "));
 });
 
 test("a finished block says nothing at all", () => {
@@ -119,16 +146,16 @@ test("but cycle still counts, because a 10-hour reset does not restore it", () =
 });
 
 // --- cooldown signature ---
-test("signature is stable as the countdown ticks", () => {
-  const a = coverageFor(row(), driving({ drivingMinutes: 60 }), { now: at("15:00") });
-  const b = coverageFor(row(), driving({ drivingMinutes: 55 }), { now: at("15:10") });
-  assert.notEqual(a.reasons[0], b.reasons[0], "wording should move");
-  assert.equal(a.signature, b.signature, "signature must not");
+test("signature is stable across polls for the same problem", () => {
+  const a = coverageFor(row(), driving({ drivingMinutes: 0 }), { now: at("15:00") });
+  const b = coverageFor(row(), driving({ drivingMinutes: 0 }), { now: at("15:10") });
+  assert.equal(a.signature, b.signature);
+  assert.equal(a.signature, "running:drive");
 });
 
 test("signature changes when a different clock fails", () => {
-  const a = coverageFor(row(), driving({ drivingMinutes: 60 }), { now: at("15:00") });
-  const b = coverageFor(row(), driving({ cycleRemainingMinutes: 60 }), { now: at("15:00") });
+  const a = coverageFor(row(), driving({ drivingMinutes: 0 }), { now: at("15:00") });
+  const b = coverageFor(row(), driving({ cycleRemainingMinutes: 0 }), { now: at("15:00") });
   assert.notEqual(a.signature, b.signature);
 });
 

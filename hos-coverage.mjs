@@ -33,6 +33,9 @@ export const PHASE = { UPCOMING: "upcoming", RUNNING: "running", DONE: "done", U
 
 const WORKING_STATUSES = new Set(["ON", "D", "YM"]);
 const RESET_MINUTES = 10 * 60;
+// Mid-block, a clock this low is worth showing even though we cannot say
+// whether it will actually run out. The 60/30/20 engine does the paging.
+const LOW_CLOCK_MINUTES = Number(process.env.HOS_LOW_CLOCK_MINUTES || 60);
 
 const DRIVE_LIMIT_MIN = 11 * 60;
 const SHIFT_LIMIT_MIN = 14 * 60;
@@ -269,31 +272,49 @@ export function coverageFor(row, driver, { now = new Date(), timeZone } = {}) {
     }
   }
 
-  // How much of the block is still ahead of the driver. Mid-block, only the
-  // remainder matters: hours already run are not a shortfall.
-  const remaining = win.phase === PHASE.RUNNING ? win.toEnd : need;
+  const running = win.phase === PHASE.RUNNING;
 
   // Cycle is never restored by a 10-hour reset (only a 34-hour restart does
-  // that), so it is always checked against what is left to run.
+  // that), so it is always in the list.
   const clocks = [["cycle hours", "cycle", detail.cycleMinutes, null]];
   if (!(win.phase === PHASE.UPCOMING && resetStillAhead)) {
     clocks.push(["drive time", "drive", detail.driveMinutes, DRIVE_LIMIT_MIN]);
     clocks.push(["shift time", "shift", detail.shiftMinutes, SHIFT_LIMIT_MIN]);
   }
 
-  const tail = win.phase === PHASE.RUNNING ? "to finish the block" : "for the block";
-  for (const [label, key, left, cap] of clocks) {
-    if (left == null) continue;
-    if (left <= 0) {
-      reasons.push(`${label} exhausted`);
-      failing.push(key);
-      continue;
+  if (running) {
+    // A driver already on the road is NOT measured against the time left on
+    // the schedule. The remaining window is not all driving — a tour that ends
+    // at 11:30 may be a drop and a deadhead away from finished — so demanding
+    // drive time that covers every remaining scheduled minute would flag
+    // drivers who are twenty minutes from the yard. Nothing here can tell us
+    // how much of what is left is actually driving.
+    //
+    // What IS true regardless of the schedule is a clock at zero, and a clock
+    // nearly at zero. Those are the only honest things to say mid-block.
+    for (const [label, key, left] of clocks) {
+      if (left == null) continue;
+      if (left <= 0) {
+        reasons.push(`${label} exhausted — driver is out of hours now`);
+        failing.push(key);
+      } else if (left <= LOW_CLOCK_MINUTES) {
+        notes.push(`${label} down to ${fmt(left)}`);
+      }
     }
-    if (remaining == null) continue;
-    const required = cap == null ? remaining : Math.min(remaining, cap);
-    if (left < required) {
-      reasons.push(`${label} ${fmt(left)} left, needs ${fmt(required)} ${tail}`);
-      failing.push(key);
+  } else {
+    for (const [label, key, left, cap] of clocks) {
+      if (left == null) continue;
+      if (left <= 0) {
+        reasons.push(`${label} exhausted`);
+        failing.push(key);
+        continue;
+      }
+      if (need == null) continue;
+      const required = cap == null ? need : Math.min(need, cap);
+      if (left < required) {
+        reasons.push(`${label} ${fmt(left)} left, needs ${fmt(required)} for the block`);
+        failing.push(key);
+      }
     }
   }
 
