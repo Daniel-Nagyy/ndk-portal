@@ -5,9 +5,11 @@
 // fires once per cooldown window, so a clock winding down alerts at each tier.
 // The 20-minute tier is also copied to the account's Telegram focus group.
 import dotenv from "dotenv";
-import { listAccounts, getAccountCredentials } from "./db.mjs";
+import { listAccounts, getAccountCredentials, getRecaps } from "./db.mjs";
 import { computeReadiness } from "./geotab.mjs";
 import { notifyAccount } from "./notify.mjs";
+import { coverageForRows, coverageAlert, VERDICT } from "./hos-coverage.mjs";
+import { primeReadiness } from "./readiness-cache.mjs";
 dotenv.config();
 
 const WARNING_MINUTES = 60;
@@ -72,13 +74,64 @@ function driverRisks(driver) {
   return risks;
 }
 
+// Drivers already assigned to a block today who cannot legally finish it.
+// This is the one alert that does not depend on the Chrome extension: it runs
+// here, on the server, off the poll the engine already makes.
+//
+// Deliberately quiet: only a driver whose shortfall is provable (SHORT) alerts.
+// UNKNOWN — no Geotab match, no logs — is shown on the recap page but never
+// paged, because a name we failed to match is not evidence of a problem and
+// crying wolf is how an alert channel gets muted.
+const COVERAGE_COOLDOWN_MS = Number(process.env.HOS_COVERAGE_COOLDOWN_MS ?? 2 * 60 * 60 * 1000);
+
+function todayIso(now = new Date()) {
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+async function alertOnRecapCoverage(account, readiness, now) {
+  if (process.env.HOS_COVERAGE_ALERTS === "0") return 0;
+  const today = todayIso();
+  const rows = getRecaps(account.id).filter((r) => r.dailyDate === today && String(r.driverAssigned || "").trim());
+  if (!rows.length) return 0;
+
+  const coverage = coverageForRows(rows, readiness.drivers || []);
+  let sent = 0;
+
+  for (const row of rows) {
+    const result = coverage[row.id];
+    if (!result || result.verdict !== VERDICT.SHORT) continue;
+
+    // One alert per driver per block per cooldown, not per reason, so a driver
+    // short on three clocks does not send three messages.
+    const key = `${account.id}:coverage:${row.id}:${result.reasons.join("|")}`;
+    if (now - (sentAt.get(key) || 0) < COVERAGE_COOLDOWN_MS) continue;
+    sentAt.set(key, now);
+
+    const { title, body, tag, telegramText } = coverageAlert(account.name, row, result);
+
+    await notifyAccount(account.id, {
+      title, body, tag,
+      critical: true,
+      url: "/index.html",
+      telegramText,
+      telegramFocus: true,
+    });
+    sent += 1;
+  }
+  return sent;
+}
+
 async function pollAccount(account) {
   const creds = getAccountCredentials(account.id);
   if (!creds || !creds.geotab.database || !creds.geotab.username) return { skipped: "no_geotab" };
 
   const readiness = await computeReadiness(creds.geotab);
+  // Let the Daily Recap reuse this poll rather than start its own.
+  primeReadiness(account.id, readiness);
   const now = Date.now();
   let alerts = 0;
+
+  alerts += await alertOnRecapCoverage(account, readiness, now);
 
   for (const driver of readiness.drivers) {
     // HOS status change (any -> any) → dispatcher Telegram only (no push to owner).

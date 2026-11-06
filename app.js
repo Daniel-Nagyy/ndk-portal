@@ -1262,6 +1262,70 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     if (manual) showToast("Refreshed.");
   }
 
+  // HOS coverage on the Daily Recap: can the assigned driver legally finish the
+  // block? Verdicts are computed on the server (hos-coverage.mjs) so the badge
+  // and the Telegram alert can never disagree. Dispatch only — never owners.
+  let recapHos = { coverage: {}, loadedFor: null, loading: false, error: null, stale: false };
+
+  function canSeeRecapHos(user) {
+    const role = user && (user.serverRole || user.role);
+    return ["dispatcher", "manager", "superadmin"].includes(role);
+  }
+
+  async function loadRecapHos(date) {
+    if (!canSeeRecapHos(getCurrentUser())) return;
+    if (recapHos.loading || recapHos.loadedFor === date) return;
+    recapHos.loading = true;
+    try {
+      const res = await fetch(`/api/recap-hos?date=${encodeURIComponent(date)}`, { credentials: "same-origin" });
+      const data = await res.json();
+      recapHos = {
+        coverage: (data && data.coverage) || {},
+        loadedFor: date,
+        loading: false,
+        error: data && data.success === false ? (data.error || "HOS unavailable") : null,
+        stale: Boolean(data && data.stale),
+      };
+    } catch (e) {
+      recapHos = { coverage: {}, loadedFor: date, loading: false, error: "Could not reach HOS", stale: false };
+    }
+    render();
+  }
+
+  // Called from the template: starts the fetch for the day on screen and
+  // renders nothing. loadRecapHos() is a no-op when that day is already loaded.
+  function scheduleRecapHos(date) {
+    if (canSeeRecapHos(getCurrentUser()) && recapHos.loadedFor !== date && !recapHos.loading) {
+      window.setTimeout(() => loadRecapHos(date), 0);
+    }
+    return "";
+  }
+
+  // The badge shown beside each driver. UNKNOWN is never dressed up as OK.
+  function renderRecapHosBadge(row) {
+    if (!canSeeRecapHos(getCurrentUser())) return "";
+    const result = recapHos.coverage[row.id];
+    if (!result) {
+      if (recapHos.loading) return `<span class="hos-badge hos-badge-wait">HOS…</span>`;
+      if (recapHos.error) return `<span class="hos-badge hos-badge-unknown" title="${escapeHtml(recapHos.error)}">HOS ?</span>`;
+      return "";
+    }
+    const reasons = (result.reasons || []).join(" · ");
+    const title = escapeHtml(reasons || "Clocks cover this block");
+    if (result.verdict === "SHORT") {
+      return `<div class="hos-badge hos-badge-short" title="${title}">
+        <strong>⛔ NOT ENOUGH HOS</strong>
+        <ul>${(result.reasons || []).map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+      </div>`;
+    }
+    if (result.verdict === "UNKNOWN") return `<span class="hos-badge hos-badge-unknown" title="${title}">HOS unknown</span>`;
+    if (result.verdict === "PARTIAL") return `<span class="hos-badge hos-badge-partial" title="${title}">HOS ok · block length unchecked</span>`;
+    const left = result.detail && result.detail.cycleMinutes != null
+      ? ` ${Math.floor(result.detail.cycleMinutes / 60)}h cycle`
+      : "";
+    return `<span class="hos-badge hos-badge-ok" title="${title}">✓ HOS${escapeHtml(left)}</span>`;
+  }
+
   // Driver Slots dashboard: which drivers have worked a given slot before.
   // `slotOptions` is what the filters offer, `slotMatches` the current answer.
   let slotOptions = null;
@@ -5054,6 +5118,12 @@ function renderRecapPage(user) {
     </div>
 
     ${renderRecapDayControls(user, editable)}
+    ${scheduleRecapHos(selectedRecapDate)}
+    ${recapHos.error && canSeeRecapHos(user)
+      ? `<p class="hos-strip hos-strip-bad">HOS coverage unavailable: ${escapeHtml(recapHos.error)}</p>`
+      : recapHos.stale && canSeeRecapHos(user)
+        ? `<p class="hos-strip hos-strip-warn">HOS figures are stale — Geotab did not answer the latest poll.</p>`
+        : ""}
 
     <div class="panel">
       <div class="panel-header">
@@ -5200,6 +5270,7 @@ function renderRecapMobileCards(rows) {
                 <div>
                   <strong class="rcv-name">${escapeHtml(driver)}</strong>
                   <span class="rcv-sub">Block ${escapeHtml(blockId)}</span>
+                  ${renderRecapHosBadge(row)}
                 </div>
               </div>
               <div class="rcv-badges">
@@ -5268,7 +5339,7 @@ function renderRecapRow(row, index, editable) {
   return `
     <tr>
       <td class="row-number">${index}</td>
-      <td class="driver-cell">${control("driverAssigned")}</td>
+      <td class="driver-cell">${control("driverAssigned")}${renderRecapHosBadge(row)}</td>
       <td>${control("tripDate")}</td>
       <td class="id-cell">${control("tripId")}</td>
       <td class="id-cell">${control("blockId")}</td>
@@ -7125,6 +7196,7 @@ case "hos-close-filters":
     const datePicker = event.target.closest("[data-recap-date-picker]");
     if (datePicker) {
       if (datePicker.value) selectedRecapDate = datePicker.value;
+      recapHos = { coverage: {}, loadedFor: null, loading: false, error: null, stale: false };
       render();
       return;
     }
@@ -7132,6 +7204,7 @@ case "hos-close-filters":
     const dateSelect = event.target.closest("[data-recap-date]");
     if (dateSelect) {
       selectedRecapDate = dateSelect.value;
+      recapHos = { coverage: {}, loadedFor: null, loading: false, error: null, stale: false };
       render();
       return;
     }

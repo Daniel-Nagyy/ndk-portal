@@ -30,6 +30,8 @@ const alertDedupe = new Map();
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
 import { startHosEngine } from './hos-engine.mjs';
+import { coverageForRows } from './hos-coverage.mjs';
+import { readinessForAccount } from './readiness-cache.mjs';
 import { startTourWatch } from './tour-watch.mjs';
 import { getZones, getVehiclePositions } from './geotab.mjs';
 import { isYardZone, trucksInYard } from './yard.mjs';
@@ -777,7 +779,10 @@ const requestHandler = (req, res) => {  // CORS Headers
   // see it at all. The account is matched on id or name so it works whatever
   // the account id turns out to be on a given deployment; set
   // DRIVER_SLOTS_ACCOUNTS to a comma-separated list to change who gets it.
-  const SLOT_ACCOUNTS = (process.env.DRIVER_SLOTS_ACCOUNTS || '')
+  // Owners are deliberately excluded from HOS coverage on the recap.
+const RECAP_HOS_ROLES = ['dispatcher', 'manager', 'superadmin'];
+
+const SLOT_ACCOUNTS = (process.env.DRIVER_SLOTS_ACCOUNTS || '')
     .split(',').map((v) => v.trim().toLowerCase()).filter(Boolean);
   const slotAccountAllowed = (accountId) => {
     if (!accountId) return false;
@@ -898,6 +903,47 @@ const requestHandler = (req, res) => {  // CORS Headers
     const key = url.searchParams.get('key') || '';
     if (!key) return sendJson(400, { success: false, error: 'No driver given' });
     sendJson(200, { success: true, key, shifts: driverSlotHistory(accountId, key) });
+    return;
+  }
+
+  // Can each driver on today's recap legally finish the block they are on?
+  // Dispatch-only: owners do not see HOS coverage.
+  if (url.pathname === '/api/recap-hos' && req.method === 'GET') {
+    (async () => {
+      try {
+        const authUser = getAuthUser(req);
+        if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
+        if (!RECAP_HOS_ROLES.includes(authUser.role)) {
+          return sendJson(403, { success: false, error: 'HOS coverage is not available for this role' });
+        }
+        const accountId = authUser.role === 'superadmin'
+          ? (url.searchParams.get('accountId') || authUser.account_id)
+          : authUser.account_id;
+        if (!accountId) return sendJson(400, { success: false, error: 'No account for this user' });
+
+        const date = url.searchParams.get('date') || '';
+        const rows = getRecaps(accountId).filter((r) => !date || r.dailyDate === date);
+        if (!rows.length) return sendJson(200, { success: true, date, coverage: {}, drivers: 0, rows: 0 });
+
+        // Shared with the alert engine and rate-limited, so opening the recap
+        // never starts another Geotab poll of its own.
+        const readiness = await readinessForAccount(accountId);
+        const coverage = coverageForRows(rows, readiness.drivers || []);
+        sendJson(200, {
+          success: true,
+          date,
+          coverage,
+          rows: rows.length,
+          drivers: (readiness.drivers || []).length,
+          fetchedAt: readiness.fetchedAt,
+          stale: readiness.stale || false,
+        });
+      } catch (error) {
+        // A Geotab outage or a blocked login must not take the recap page down;
+        // the rows still render, just without verdicts.
+        sendJson(200, { success: false, error: simplifyError(error), coverage: {} });
+      }
+    })();
     return;
   }
 

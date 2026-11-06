@@ -375,10 +375,18 @@ function buildRow(user, logs, now, availability = {}, extraNote = null) {
     userName: user.userName || "",
     cycleRemainingMinutes: availability.cycleRemainingMinutes ?? null,
     cycleRemainingDisplay: availability.cycleRemainingDisplay ?? "--",
+    cycleTomorrowMinutes: availability.cycleTomorrowMinutes ?? null,
     cycleTomorrowDisplay: availability.cycleTomorrowDisplay ?? "--",
+    // The numeric forms travel alongside the display strings: anything that has
+    // to compare a clock against a block length needs minutes, and re-parsing
+    // "8:00" downstream loses the difference between 0 and unknown.
+    drivingMinutes: availability.drivingMinutes ?? null,
     drivingDisplay: availability.drivingDisplay ?? "--",
+    dutyMinutes: availability.dutyMinutes ?? null,
     dutyDisplay: availability.dutyDisplay ?? "--",
+    workdayMinutes: availability.workdayMinutes ?? null,
     workdayDisplay: availability.workdayDisplay ?? "--",
+    breakMinutes: availability.breakMinutes ?? null,
     breakDisplay: availability.breakDisplay ?? "--",
     cycleResetMinutes: null,
     cycleResetDisplay: "--",
@@ -444,6 +452,9 @@ function finalizeDriverRecord(user, name, finalLogs, finalLogsError, availabilit
       id: user.id, driverName: name, status: "Error", vehicle: null, activeTripId: null, lastStatusChange: null,
       breakTime: availability.breakDisplay, driving: availability.drivingDisplay, duty: availability.dutyDisplay,
       workday: availability.workdayDisplay, cycle: availability.cycleRemainingDisplay, updatedAt: new Date().toISOString(),
+      cycleRemainingMinutes: availability.cycleRemainingMinutes ?? null, drivingMinutes: availability.drivingMinutes ?? null,
+      dutyMinutes: availability.dutyMinutes ?? null, workdayMinutes: availability.workdayMinutes ?? null,
+      breakMinutes: availability.breakMinutes ?? null, minutesLeft: null,
       clientId: null, currentStatus: "Error", cycleRemainingDisplay: availability.cycleRemainingDisplay,
       cycleTomorrowDisplay: availability.cycleTomorrowDisplay, drivingDisplay: availability.drivingDisplay,
       dutyDisplay: availability.dutyDisplay, workdayDisplay: availability.workdayDisplay, breakDisplay: availability.breakDisplay,
@@ -461,6 +472,11 @@ function finalizeDriverRecord(user, name, finalLogs, finalLogsError, availabilit
     cycleRemainingDisplay: row.cycleRemainingDisplay, cycleTomorrowDisplay: row.cycleTomorrowDisplay,
     drivingDisplay: row.drivingDisplay, dutyDisplay: row.dutyDisplay, workdayDisplay: row.workdayDisplay,
     breakDisplay: row.breakDisplay, cycleResetDisplay: row.cycleResetDisplay, remainingDisplay: row.remainingDisplay,
+    drivingMinutes: row.drivingMinutes ?? null, dutyMinutes: row.dutyMinutes ?? null,
+    workdayMinutes: row.workdayMinutes ?? null, breakMinutes: row.breakMinutes ?? null,
+    cycleResetMinutes: row.cycleResetMinutes ?? null,
+    // Minutes still owed on the 10-hour reset; 0 once it is complete.
+    minutesLeft: row.minutesLeft ?? null,
     statusSinceDisplay: row.statusSinceDisplay, statusSinceIso: row.statusSinceIso, note: row.note, readiness: row.readiness
   };
 }
