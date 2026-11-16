@@ -1647,6 +1647,17 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   return normalizedName.includes("triplej");
 }
 
+// Legendary gets its own starting message: an earlier yard call (1h before
+// Stop 1), an explicit Geotab ON DUTY time, and a 13-minute BT Clear instead
+// of 12. Matched on the account name the same way Triple J is, so the account
+// only has to be created -- no code change when it is.
+function isLegendaryClient(clientId) {
+  return String(clientName(clientId) || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .includes("legendary");
+}
+
 // Triple J asked for On Duty Time and Issues / Comments off the daily recap
 // for now. The columns are only hidden: both fields stay on the row and keep
 // whatever was already typed into them, so turning this off brings them back
@@ -5526,6 +5537,26 @@ function makeStartingMessage(row) {
 ⏰ Heads up: the truck is at ${fuelValue}% fuel — please arrive at the yard a little early to fuel up before your trip.
 `
       : "";
+
+  // Legendary's own wording and offsets. Every time is measured off Stop 1 so
+  // the message follows a dispatcher's edit, falling back to the stored
+  // Requested Start when Stop 1 is blank.
+  if (isLegendaryClient(row.clientId)) {
+    const base = normalizeTime(row.stopOneupcoming) || normalizeTime(row.requestedStart);
+    const off = (minutes) => (base ? subtractMinutes(base, minutes) || "—" : "—");
+
+    return `👋 Hello ${row.driverAssigned || "—"},
+
+📍 Yard arrival time: ${off(60)}
+⏰Geotab ON DUTY: ${off(30)}
+🟢 Yard check-in (BT Clear): ${off(13)}
+🚛 Truck assigned: ${row.truck || "—"}
+⛽️ Fuel %: ${row.fuel || "—"}
+${lowFuelLine}
+⚠️ Please complete your pre-trip inspection and certify your logs before starting.
+
+📢 Please confirm receipt and notify us once you arrive at the yard. Thank you!`;
+  }
 
   // Same offset as the Requested Start column (30 min before Stop 1). Triple J
   // recomputes from Stop 1 so the message follows a dispatcher's edit; other
