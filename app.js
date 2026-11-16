@@ -1651,11 +1651,15 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
 // Stop 1), an explicit Geotab ON DUTY time, and a 13-minute BT Clear instead
 // of 12. Matched on the account name the same way Triple J is, so the account
 // only has to be created -- no code change when it is.
+//
+// Matches on "legend" rather than the full spelling: the live account is named
+// "legenday-legacy" (no r), and an account name is typed by a human, so an
+// exact spelling is the wrong thing to hang a dispatcher's message on.
 function isLegendaryClient(clientId) {
   return String(clientName(clientId) || "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "")
-    .includes("legendary");
+    .includes("legend");
 }
 
 // Triple J asked for On Duty Time and Issues / Comments off the daily recap
