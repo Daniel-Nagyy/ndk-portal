@@ -1336,6 +1336,196 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     return note ? `${ok}<span class="hos-badge hos-badge-note">⏳ ${escapeHtml(note)}</span>` : ok;
   }
 
+  // ---------------------------------------------------------------------
+  // Superadmin live board
+  // ---------------------------------------------------------------------
+  // One screen across every account. It polls the board endpoint, and anything
+  // that arrives while the page is open is also thrown up as a popup card.
+  //
+  // The popup queue is separate from the board list on purpose: dismissing a
+  // popup should get it off your screen without marking the alert handled, and
+  // clearing it from the board should take its popup with it. Two lists, one
+  // id, so either action can find the other.
+  const SUPER_POLL_MS = 5000;
+  const SUPER_SEVERITIES = ["critical", "urgent", "warning", "info"];
+  const SUPER_POPUP_LIMIT = 6;
+
+  let superBoard = { alerts: [], health: [], counts: {}, accounts: [], maxId: 0, loadedAt: null };
+  let superFilterAccounts = new Set();   // empty = every account
+  let superFilterSeverities = new Set(); // empty = every severity
+  let superPopups = [];
+  let superPopupsMuted = false;
+  let superSound = false;
+  let superTimer = null;
+  let superLoading = false;
+  // First load must not fire 200 popups for alerts that were already there.
+  let superPrimed = false;
+
+  // The app maps the backend's "superadmin" onto its own "admin" role for
+  // views and permissions (mapServerRole), so user.role is NOT the thing to
+  // test here. serverRole keeps the real one, and only a real superadmin may
+  // see across accounts.
+  function isSuperadmin(user) {
+    return Boolean(user && user.serverRole === "superadmin");
+  }
+
+  function superQuery(extra = {}) {
+    const params = new URLSearchParams();
+    if (superFilterAccounts.size) params.set("accounts", [...superFilterAccounts].join(","));
+    if (superFilterSeverities.size) params.set("severities", [...superFilterSeverities].join(","));
+    for (const [k, v] of Object.entries(extra)) if (v != null) params.set(k, v);
+    return params.toString();
+  }
+
+  async function loadSuperBoard({ incremental = false } = {}) {
+    const user = getCurrentUser();
+    if (!isSuperadmin(user) || superLoading) return;
+    superLoading = true;
+    try {
+      // An incremental poll asks only for what it has not seen. The full load
+      // is used on first paint and whenever a filter changes, because the
+      // filtered set is a different question entirely.
+      const qs = superQuery(incremental && superBoard.maxId ? { sinceId: superBoard.maxId } : {});
+      const res = await fetch(`/api/superadmin/overview?${qs}`, { credentials: "same-origin" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.success) return;
+
+      superBoard.health = data.health || [];
+      superBoard.counts = data.counts || {};
+      superBoard.accounts = data.accounts || [];
+      superBoard.loadedAt = data.now;
+
+      const incoming = data.alerts || [];
+      if (incremental) {
+        if (incoming.length) {
+          // Newest first, and never let the in-memory list grow unbounded.
+          superBoard.alerts = [...incoming, ...superBoard.alerts].slice(0, 400);
+          superBoard.maxId = Math.max(superBoard.maxId, ...incoming.map((a) => a.id));
+          if (superPrimed) queueSuperPopups(incoming);
+        }
+      } else {
+        superBoard.alerts = incoming;
+        superBoard.maxId = data.maxId || 0;
+      }
+      superPrimed = true;
+      if (currentView === "super-board" || superPopups.length) render();
+    } catch (_) {
+      // A failed poll is not worth a toast every five seconds; the next one
+      // either works or the staleness shows in the header.
+    } finally {
+      superLoading = false;
+    }
+  }
+
+  function queueSuperPopups(alerts) {
+    if (superPopupsMuted) return;
+    // Oldest first so the newest ends up on top of the stack.
+    for (const alert of [...alerts].reverse()) {
+      if (superPopups.some((p) => p.id === alert.id)) continue;
+      superPopups.unshift(alert);
+    }
+    // A burst (an engine catching up after a restart) must not bury the
+    // screen. Keep the most recent few; the rest are still on the board.
+    if (superPopups.length > SUPER_POPUP_LIMIT) {
+      superPopups = superPopups.slice(0, SUPER_POPUP_LIMIT);
+    }
+    if (superSound && alerts.some((a) => a.severity === "critical")) playSuperChime();
+  }
+
+  // A short two-tone chime built in the page: no asset to ship, and nothing to
+  // fail silently if a file is missing. Browsers block audio until the user
+  // has interacted with the page, which is why the toggle is off by default.
+  function playSuperChime() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = playSuperChime.ctx || (playSuperChime.ctx = new Ctx());
+      const now = ctx.currentTime;
+      [880, 660].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = freq;
+        osc.type = "sine";
+        gain.gain.setValueAtTime(0.0001, now + i * 0.16);
+        gain.gain.exponentialRampToValueAtTime(0.18, now + i * 0.16 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.16 + 0.15);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now + i * 0.16);
+        osc.stop(now + i * 0.16 + 0.16);
+      });
+    } catch (_) {}
+  }
+
+  function startSuperBoard() {
+    if (superTimer) return;
+    loadSuperBoard();
+    superTimer = window.setInterval(() => loadSuperBoard({ incremental: true }), SUPER_POLL_MS);
+  }
+
+  function stopSuperBoard() {
+    if (superTimer) window.clearInterval(superTimer);
+    superTimer = null;
+    superPrimed = false;
+    superPopups = [];
+    superBoard = { alerts: [], health: [], counts: {}, accounts: [], maxId: 0, loadedAt: null };
+  }
+
+  async function dismissSuperAlert(id) {
+    const numeric = Number(id);
+    // Off the screen immediately; the poll would otherwise take up to five
+    // seconds to agree and the click would feel broken.
+    superBoard.alerts = superBoard.alerts.filter((a) => a.id !== numeric);
+    superPopups = superPopups.filter((a) => a.id !== numeric);
+    render();
+    try {
+      await fetch("/api/superadmin/alerts/dismiss", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: numeric }),
+      });
+    } catch (_) {
+      showToast("Could not dismiss — it will reappear on the next refresh.");
+    }
+    loadSuperBoard();
+  }
+
+  async function dismissSuperAll(accountId) {
+    const shown = superVisibleAlerts();
+    if (!shown.length) return;
+    // Bounded by the highest id on screen, so an alert that arrives between
+    // this render and the click is not silently cleared along with the rest.
+    const maxId = Math.max(...shown.map((a) => a.id));
+    const scoped = accountId || (superFilterAccounts.size === 1 ? [...superFilterAccounts][0] : null);
+    superBoard.alerts = superBoard.alerts.filter(
+      (a) => a.id > maxId || (scoped && a.accountId !== scoped)
+    );
+    superPopups = superPopups.filter((a) => a.id > maxId || (scoped && a.accountId !== scoped));
+    render();
+    try {
+      const res = await fetch("/api/superadmin/alerts/dismiss", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxId, accountId: scoped }),
+      });
+      const data = await res.json();
+      showToast(`Cleared ${data.dismissed || 0} alert(s).`);
+    } catch (_) {
+      showToast("Could not clear those alerts.");
+    }
+    loadSuperBoard();
+  }
+
+  function superVisibleAlerts() {
+    return superBoard.alerts.filter((a) => {
+      if (superFilterAccounts.size && !superFilterAccounts.has(a.accountId)) return false;
+      if (superFilterSeverities.size && !superFilterSeverities.has(a.severity)) return false;
+      return true;
+    });
+  }
+
   // Driver Slots dashboard: which drivers have worked a given slot before.
   // `slotOptions` is what the filters offer, `slotMatches` the current answer.
   let slotOptions = null;
@@ -1545,6 +1735,9 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
     };
     state.users = (state.users || []).filter((u) => u.id !== appUser.id && u.email !== appUser.email);
     state.users.push(appUser);
+    // The live board polls for every superadmin screen, not only while the
+    // board is open: the popups have to follow you around the app.
+    if (isSuperadmin(appUser)) startSuperBoard();
     return appUser;
   }
 
@@ -3560,6 +3753,7 @@ const parsed = parseNetradynePaste(text, clientId);
           ${renderView(user)}
         </section>
       </main>
+      ${renderSuperPopups(user)}
     `;
 
     // Restore all form field values + focus/cursor after re-rendering.
@@ -3721,6 +3915,8 @@ function renderTopbar(user) {
     const shared = [{ id: "settings", label: "Settings", icon: "settings" }];
     if (role === "admin") {
       return [
+        // First, because it is the screen that tells you where to go next.
+        ...(isSuperadmin(getCurrentUser()) ? [{ id: "super-board", label: "Live Board", icon: "dashboard" }] : []),
         { id: "dashboard", label: "Command Center", icon: "dashboard" },
         { id: "recap", label: "Daily Recap", icon: "recap" },
         { id: "netradyne-recap", label: "Netradyne Recap", icon: "netradyne-recap" },
@@ -3770,6 +3966,11 @@ function renderTopbar(user) {
   }
 
   function renderView(user) {
+    if (currentView === "super-board") {
+      return isSuperadmin(user)
+        ? renderSuperBoard(user)
+        : `<section class="page-head"><div><h2>Not available</h2><p>The Live Board is for superadmins.</p></div></section>`;
+    }
     if (currentView === "dashboard") return renderAdminDashboard(user);
     if (currentView === 'netradyne-dashboard') return renderNetradyneDashboard(user);
     if (currentView === 'netradyne-recap') return renderNetradyneRecapPage(user);
@@ -5170,6 +5371,200 @@ function renderRecapPage(user) {
     </div>
   `;
 }
+
+  // ------------------------------------------------------------------
+  // Superadmin live board
+  // ------------------------------------------------------------------
+  const SUPER_SEV_LABEL = { critical: "Critical", urgent: "Urgent", warning: "Warning", info: "Info" };
+
+  function superTimeAgo(iso) {
+    // SQLite writes datetime('now') as "YYYY-MM-DD HH:MM:SS" in UTC with no
+    // zone marker, which Date parses as LOCAL time and lands hours off. Spell
+    // the zone out rather than letting the browser guess.
+    const normalized = /Z|[+-]\d{2}:?\d{2}$/.test(iso || "") ? iso : `${String(iso || "").replace(" ", "T")}Z`;
+    const then = Date.parse(normalized);
+    if (!Number.isFinite(then)) return "";
+    const mins = Math.round((Date.now() - then) / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ${mins % 60}m ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }
+
+  function renderSuperAlertCard(alert, { popup = false } = {}) {
+    const sev = SUPER_SEVERITIES.includes(alert.severity) ? alert.severity : "info";
+    const meta = alert.meta || {};
+    const details = [
+      meta.driver ? `Driver: ${meta.driver}` : "",
+      meta.tour ? `Block/Trip: ${meta.tour}` : "",
+      meta.truck ? `Truck: ${meta.truck}` : "",
+      meta.site ? `Site: ${meta.site}` : "",
+    ].filter(Boolean);
+
+    return `
+      <article class="sb-card sb-sev-${sev}${popup ? " sb-card--popup" : ""}" data-alert-id="${alert.id}">
+        <div class="sb-card-bar"></div>
+        <div class="sb-card-body">
+          <div class="sb-card-top">
+            <span class="sb-pill sb-pill-${sev}">${escapeHtml(SUPER_SEV_LABEL[sev])}</span>
+            <span class="sb-kind">${escapeHtml(alert.kindLabel || alert.kind)}</span>
+            <span class="sb-account">${escapeHtml(alert.accountName || alert.accountId)}</span>
+            <span class="sb-time">${escapeHtml(superTimeAgo(alert.createdAt))}</span>
+          </div>
+          <strong class="sb-title">${escapeHtml(alert.title)}</strong>
+          ${alert.body ? `<p class="sb-body">${escapeHtml(alert.body)}</p>` : ""}
+          ${details.length ? `<p class="sb-details">${escapeHtml(details.join(" \u00b7 "))}</p>` : ""}
+        </div>
+        <div class="sb-card-actions">
+          ${popup
+            ? `<button class="btn btn-secondary btn-small" type="button" data-action="super-popup-hide" data-alert-id="${alert.id}">Hide</button>`
+            : ""}
+          <button class="btn btn-primary btn-small" type="button" data-action="super-dismiss" data-alert-id="${alert.id}">Dismiss</button>
+        </div>
+      </article>
+    `;
+  }
+
+  // The popup stack. Rendered outside the view so it follows you onto any
+  // screen, which is the point: you should not have to be ON the board to find
+  // out that something caught fire.
+  function renderSuperPopups(user) {
+    if (!isSuperadmin(user) || !superPopups.length) return "";
+    return `
+      <div class="sb-popups" role="region" aria-label="Live alerts">
+        <div class="sb-popups-head">
+          <strong>${superPopups.length} new</strong>
+          <div>
+            <button class="btn btn-secondary btn-small" type="button" data-action="super-popup-mute">
+              ${superPopupsMuted ? "Popups off" : "Mute popups"}
+            </button>
+            <button class="btn btn-secondary btn-small" type="button" data-action="super-popup-hide-all">Hide all</button>
+          </div>
+        </div>
+        ${superPopups.map((alert) => renderSuperAlertCard(alert, { popup: true })).join("")}
+      </div>
+    `;
+  }
+
+  function renderSuperTiles() {
+    const rows = superBoard.health.length
+      ? superBoard.health
+      : superBoard.accounts.map((a) => ({ ...a, counts: { critical: 0, urgent: 0, warning: 0, info: 0, total: 0 } }));
+
+    return rows.map((row) => {
+      const counts = row.counts || {};
+      const selected = superFilterAccounts.has(row.id);
+      // Worst open severity decides the tile's colour: a tile that is calm
+      // because the count is low but one of them is critical would be a lie.
+      const worst = SUPER_SEVERITIES.find((sev) => counts[sev] > 0) || "none";
+      return `
+        <button
+          class="sb-tile sb-sev-${worst}${selected ? " is-selected" : ""}"
+          type="button"
+          data-action="super-filter-account"
+          data-account-id="${escapeHtml(row.id)}"
+          title="Show only ${escapeHtml(row.name)}"
+        >
+          <span class="sb-tile-name">${escapeHtml(row.name)}</span>
+          <span class="sb-tile-count">${counts.total || 0}</span>
+          <span class="sb-tile-breakdown">
+            ${SUPER_SEVERITIES.filter((sev) => counts[sev]).map((sev) =>
+              `<em class="sb-dot sb-dot-${sev}">${counts[sev]}</em>`).join("") || "<em class='sb-clear'>clear</em>"}
+          </span>
+        </button>
+      `;
+    }).join("");
+  }
+
+  function renderSuperBoard(user) {
+    const visible = superVisibleAlerts();
+    const grouped = new Map();
+    for (const alert of visible) {
+      const group = alert.kindGroup || "other";
+      if (!grouped.has(group)) grouped.set(group, []);
+      grouped.get(group).push(alert);
+    }
+    const GROUP_LABEL = {
+      hos: "Hours of service",
+      tour: "On the road",
+      yard: "Yard",
+      safety: "Safety",
+      system: "System",
+      other: "Everything else",
+    };
+    const GROUP_ORDER = ["hos", "tour", "yard", "safety", "system", "other"];
+
+    return `
+      <section class="page-head">
+        <div>
+          <h2>Live Board</h2>
+          <p>Every account in one place${superBoard.loadedAt ? ` \u00b7 updated ${escapeHtml(superTimeAgo(superBoard.loadedAt))}` : ""}.</p>
+        </div>
+        <div class="actions-row">
+          <button class="btn btn-secondary" type="button" data-action="super-sound">
+            ${superSound ? "\ud83d\udd0a Sound on" : "\ud83d\udd07 Sound off"}
+          </button>
+          <button class="btn btn-secondary" type="button" data-action="super-popup-mute">
+            ${superPopupsMuted ? "Popups muted" : "Popups on"}
+          </button>
+          <button class="btn btn-secondary" type="button" data-action="super-refresh">Refresh</button>
+          ${visible.length ? `<button class="btn btn-primary" type="button" data-action="super-clear-all">Clear ${visible.length}</button>` : ""}
+        </div>
+      </section>
+
+      <div class="sb-tiles">${renderSuperTiles()}</div>
+
+      <div class="sb-filters">
+        <button class="sb-chip${superFilterAccounts.size ? "" : " is-on"}" type="button" data-action="super-filter-clear">
+          All accounts
+        </button>
+        ${SUPER_SEVERITIES.map((sev) => `
+          <button class="sb-chip sb-chip-${sev}${superFilterSeverities.has(sev) ? " is-on" : ""}"
+                  type="button" data-action="super-filter-severity" data-severity="${sev}">
+            ${escapeHtml(SUPER_SEV_LABEL[sev])}
+          </button>
+        `).join("")}
+      </div>
+
+      ${renderSuperHealth()}
+
+      ${visible.length ? GROUP_ORDER.filter((g) => grouped.has(g)).map((group) => `
+        <div class="panel sb-group">
+          <div class="panel-header">
+            <h3>${escapeHtml(GROUP_LABEL[group])}</h3>
+            <span class="pill blue">${grouped.get(group).length}</span>
+          </div>
+          <div class="panel-body sb-list">
+            ${grouped.get(group).map((alert) => renderSuperAlertCard(alert)).join("")}
+          </div>
+        </div>
+      `).join("") : `
+        <div class="empty-state">
+          <div class="truck-empty-icon">\u2705</div>
+          <strong>Nothing open</strong>
+          <p>${superFilterAccounts.size || superFilterSeverities.size
+            ? "No alerts match the filters above."
+            : "Every account is clear. New alerts appear here and pop up on screen."}</p>
+        </div>
+      `}
+    `;
+  }
+
+  // Is the data actually arriving? An empty board means "all clear" only if
+  // the feeds are alive; if the extension stopped pushing, it means nothing.
+  function renderSuperHealth() {
+    if (!superBoard.health.length) return "";
+    const stale = superBoard.health.filter((h) => !h.lateUpdatedAt && !h.hosUpdatedAt && !h.siteUpdatedAt);
+    if (!stale.length) return "";
+    return `
+      <div class="sb-health">
+        <strong>\u26a0\ufe0f No data received</strong>
+        <span>${stale.map((h) => escapeHtml(h.name)).join(", ")} —
+        nothing has been pushed from the extension, so an empty board here does not mean all clear.</span>
+      </div>
+    `;
+  }
 
   function renderRecapDayControls(user, editable) {
     const dates = availableRecapDates(user);
@@ -7023,6 +7418,7 @@ if (recapToggle) {
       case "logout": {
         fetch("/api/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
         const loggedOutId = session?.userId;
+        stopSuperBoard();
         session = null;
         saveSession();
         state.users = (state.users || []).filter((u) => u.id !== loggedOutId);
@@ -7049,6 +7445,71 @@ case "hos-close-filters":
   hosFiltersOpen = false;
   render();
   break;
+      case "super-dismiss":
+        dismissSuperAlert(action.dataset.alertId);
+        break;
+
+      case "super-popup-hide":
+        // Off the screen, still on the board: this is "I have seen it", not
+        // "it is handled".
+        superPopups = superPopups.filter((a) => a.id !== Number(action.dataset.alertId));
+        render();
+        break;
+
+      case "super-popup-hide-all":
+        superPopups = [];
+        render();
+        break;
+
+      case "super-popup-mute":
+        superPopupsMuted = !superPopupsMuted;
+        if (superPopupsMuted) superPopups = [];
+        showToast(superPopupsMuted ? "Popups muted — alerts still land on the board." : "Popups on.");
+        render();
+        break;
+
+      case "super-sound":
+        superSound = !superSound;
+        // Browsers only allow audio after a gesture, and this click is one, so
+        // the confirmation chime also proves it will actually be audible.
+        if (superSound) playSuperChime();
+        render();
+        break;
+
+      case "super-refresh":
+        loadSuperBoard();
+        showToast("Refreshing the board…");
+        break;
+
+      case "super-clear-all":
+        dismissSuperAll(null);
+        break;
+
+      case "super-filter-account": {
+        const id = action.dataset.accountId;
+        if (superFilterAccounts.has(id)) superFilterAccounts.delete(id);
+        else superFilterAccounts.add(id);
+        loadSuperBoard();
+        render();
+        break;
+      }
+
+      case "super-filter-severity": {
+        const sev = action.dataset.severity;
+        if (superFilterSeverities.has(sev)) superFilterSeverities.delete(sev);
+        else superFilterSeverities.add(sev);
+        loadSuperBoard();
+        render();
+        break;
+      }
+
+      case "super-filter-clear":
+        superFilterAccounts.clear();
+        superFilterSeverities.clear();
+        loadSuperBoard();
+        render();
+        break;
+
       case "copy-all-triplej-confirmations":
         copyAllTripleJConfirmations(user);
         break;

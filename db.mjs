@@ -137,6 +137,29 @@ CREATE INDEX IF NOT EXISTS idx_driver_shifts_driver
 
 -- Failed provider logins (Geotab/Netradyne). Persisted so a wrong password stays
 -- blocked across restarts instead of resetting the counter and locking the account.
+-- Every alert the portal raises, kept so the superadmin board can show what
+-- happened rather than only what is happening. Alerts were fire-and-forget to
+-- push and Telegram before this: once sent, there was no record anywhere.
+--
+-- dedupe_key is the caller's own key (the same one the senders cool down on).
+-- It is NOT unique: the same key recurring later is a real second event and
+-- has to be its own row, or a recurring problem would look like one incident.
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT,
+  dedupe_key TEXT,
+  meta TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  dismissed_at TEXT,
+  dismissed_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_feed ON alerts (dismissed_at, id DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_account ON alerts (account_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS auth_failures (
   id TEXT PRIMARY KEY,          -- "<provider>:<key>"
   provider TEXT NOT NULL,       -- 'geotab' | 'netradyne'
@@ -210,6 +233,119 @@ export function clearAuthFailure(provider, ref) {
 
 export function listAuthFailures() {
   return db.prepare("SELECT * FROM auth_failures ORDER BY provider, ref").all();
+}
+
+// ---------- Alerts (the superadmin board's feed) ----------
+
+// Ranked so a query can ask for "warning and worse" with one comparison, and
+// so the board can sort by how much something matters rather than by name.
+export const ALERT_SEVERITIES = ["critical", "urgent", "warning", "info"];
+const SEVERITY_RANK = { critical: 0, urgent: 1, warning: 2, info: 3 };
+export const alertSeverityRank = (severity) =>
+  SEVERITY_RANK[severity] == null ? 9 : SEVERITY_RANK[severity];
+
+// How long a dismissed or stale alert is kept. Long enough to look back over a
+// weekend, short enough that the table does not grow without bound.
+const ALERT_RETENTION_DAYS = 21;
+
+export function recordAlert({ accountId, kind, severity, title, body, dedupeKey, meta }) {
+  const row = db
+    .prepare(`INSERT INTO alerts (account_id, kind, severity, title, body, dedupe_key, meta)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      String(accountId || ""),
+      String(kind || "other"),
+      ALERT_SEVERITIES.includes(severity) ? severity : "info",
+      String(title || "").slice(0, 300),
+      String(body || "").slice(0, 2000),
+      dedupeKey ? String(dedupeKey).slice(0, 200) : null,
+      meta ? JSON.stringify(meta).slice(0, 4000) : null
+    );
+  return getAlert(row.lastInsertRowid);
+}
+
+export function getAlert(id) {
+  const row = db.prepare("SELECT * FROM alerts WHERE id = ?").get(id);
+  return row ? shapeAlert(row) : null;
+}
+
+function shapeAlert(row) {
+  let meta = null;
+  // A row written by an older build, or truncated at the 4000-char cap, must
+  // not take the whole feed down with it.
+  try { meta = row.meta ? JSON.parse(row.meta) : null; } catch (_) { meta = null; }
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    kind: row.kind,
+    severity: row.severity,
+    title: row.title,
+    body: row.body || "",
+    dedupeKey: row.dedupe_key || null,
+    meta,
+    createdAt: row.created_at,
+    dismissedAt: row.dismissed_at || null,
+    dismissedBy: row.dismissed_by || null,
+  };
+}
+
+// The board's feed. `sinceId` is what the live poll uses: it asks only for what
+// it has not seen, so a quiet minute costs one empty query.
+export function listAlerts({
+  accountIds = null, kinds = null, severities = null,
+  sinceId = null, includeDismissed = false, limit = 200,
+} = {}) {
+  const where = [];
+  const args = [];
+  if (!includeDismissed) where.push("dismissed_at IS NULL");
+  if (sinceId) { where.push("id > ?"); args.push(Number(sinceId)); }
+  const inClause = (col, values) => {
+    const list = [...values].filter(Boolean);
+    if (!list.length) return;
+    where.push(`${col} IN (${list.map(() => "?").join(",")})`);
+    args.push(...list);
+  };
+  if (accountIds) inClause("account_id", accountIds);
+  if (kinds) inClause("kind", kinds);
+  if (severities) inClause("severity", severities);
+
+  const sql = `SELECT * FROM alerts${where.length ? ` WHERE ${where.join(" AND ")}` : ""}
+               ORDER BY id DESC LIMIT ?`;
+  return db.prepare(sql).all(...args, Math.min(Number(limit) || 200, 1000)).map(shapeAlert);
+}
+
+export function dismissAlert(id, userId) {
+  return db
+    .prepare("UPDATE alerts SET dismissed_at = datetime('now'), dismissed_by = ? WHERE id = ? AND dismissed_at IS NULL")
+    .run(String(userId || ""), Number(id)).changes;
+}
+
+// Clear the board, or one account's part of it. Bounded by maxId so a dismiss
+// never swallows an alert that arrived between the render and the click.
+export function dismissAlerts({ accountId = null, maxId = null, userId } = {}) {
+  const where = ["dismissed_at IS NULL"];
+  const args = [String(userId || "")];
+  if (accountId) { where.push("account_id = ?"); }
+  if (maxId) { where.push("id <= ?"); }
+  if (accountId) args.push(accountId);
+  if (maxId) args.push(Number(maxId));
+  return db
+    .prepare(`UPDATE alerts SET dismissed_at = datetime('now'), dismissed_by = ? WHERE ${where.join(" AND ")}`)
+    .run(...args).changes;
+}
+
+// Open alerts per account per severity, for the board's header tiles.
+export function alertCounts() {
+  return db
+    .prepare(`SELECT account_id, severity, COUNT(*) AS n FROM alerts
+              WHERE dismissed_at IS NULL GROUP BY account_id, severity`)
+    .all();
+}
+
+export function pruneAlerts() {
+  return db
+    .prepare(`DELETE FROM alerts WHERE created_at < datetime('now', ?)`)
+    .run(`-${ALERT_RETENTION_DAYS} days`).changes;
 }
 
 // ---------- Driver slots (who works which slot, and when) ----------

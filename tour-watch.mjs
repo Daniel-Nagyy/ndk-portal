@@ -130,6 +130,12 @@ export async function checkAccount(account) {
           tag: `tour-offduty-${driver.id}-${event.at}`,
           critical: true,
           url: "/index.html",
+          kind: "tour-offduty",
+          severity: "critical",
+          meta: {
+            driver: driver.driverName, event: event.kind, minutesAgo: event.minutesAgo,
+            status: statusLabel(status), site: entry.siteName || null, tour, account: account.name,
+          },
           telegramText: [
             "\u{1f7e5} Driver off duty at a stop",
             `Driver: ${driver.driverName}`,
@@ -161,6 +167,12 @@ export async function checkAccount(account) {
           tag: `tour-stopped-${driver.id}-${stoppedSince}`,
           critical: true,
           url: "/index.html",
+          kind: "tour-stopped",
+          severity: "critical",
+          meta: {
+            driver: driver.driverName, stoppedFor, status: statusLabel(status),
+            tour, account: account.name,
+          },
           telegramText: [
             "\u{1f6d1} Stopped outside a site",
             `Driver: ${driver.driverName}`,

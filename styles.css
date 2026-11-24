@@ -5217,3 +5217,135 @@ tr:has(.hos-badge-short) { background: rgba(255, 77, 94, .07); }
   display: block; margin-top: 4px; padding: 2px 7px;
   background: #26231a; border: 1px solid #6b5a22; color: #e2cc7e;
 }
+
+/* ===================================================================== */
+/* Superadmin Live Board                                                 */
+/* ===================================================================== */
+/* Severity is the whole point of this screen, so it is one set of tokens
+   used by the tiles, the chips, the cards and the popups alike. Changing a
+   colour here changes it everywhere it means the same thing. */
+:root {
+  --sev-critical: #ef4444;
+  --sev-urgent: #f97316;
+  --sev-warning: #f3b33d;
+  --sev-info: #4a8dff;
+  --sev-none: #35c76b;
+}
+.sb-sev-critical { --sev: var(--sev-critical); }
+.sb-sev-urgent   { --sev: var(--sev-urgent); }
+.sb-sev-warning  { --sev: var(--sev-warning); }
+.sb-sev-info     { --sev: var(--sev-info); }
+.sb-sev-none     { --sev: var(--sev-none); }
+
+/* --- account tiles --- */
+.sb-tiles {
+  display: grid; gap: 10px; margin-bottom: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.sb-tile {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  padding: 12px 14px; cursor: pointer; text-align: left; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-left: 4px solid var(--sev, var(--line-strong));
+  border-radius: var(--radius); transition: background 0.15s, border-color 0.15s;
+}
+.sb-tile:hover { background: var(--panel-3); }
+.sb-tile.is-selected { background: var(--panel-4); border-color: var(--blue); border-left-color: var(--sev, var(--blue)); }
+.sb-tile-name { font-weight: 600; font-size: 0.92rem; }
+.sb-tile-count { font-size: 1.5rem; font-weight: 700; line-height: 1; color: var(--sev, var(--muted)); }
+.sb-tile-breakdown { display: flex; gap: 6px; flex-wrap: wrap; }
+.sb-dot { font-style: normal; font-size: 0.72rem; padding: 1px 7px; border-radius: 999px; color: #0b0f14; font-weight: 700; }
+.sb-dot-critical { background: var(--sev-critical); color: #fff; }
+.sb-dot-urgent   { background: var(--sev-urgent); }
+.sb-dot-warning  { background: var(--sev-warning); }
+.sb-dot-info     { background: var(--sev-info); color: #fff; }
+.sb-clear { font-style: normal; font-size: 0.72rem; color: var(--green); }
+
+/* --- filter chips --- */
+.sb-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.sb-chip {
+  padding: 6px 13px; border-radius: 999px; cursor: pointer; font-size: 0.82rem;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.sb-chip:hover { color: var(--text); border-color: var(--line-strong); }
+.sb-chip.is-on { color: var(--text); background: var(--panel-4); border-color: var(--blue); }
+.sb-chip-critical.is-on { border-color: var(--sev-critical); }
+.sb-chip-urgent.is-on   { border-color: var(--sev-urgent); }
+.sb-chip-warning.is-on  { border-color: var(--sev-warning); }
+.sb-chip-info.is-on     { border-color: var(--sev-info); }
+
+/* --- alert cards --- */
+.sb-list { display: flex; flex-direction: column; gap: 8px; }
+.sb-card {
+  display: flex; align-items: stretch; gap: 0; overflow: hidden;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.sb-card-bar { width: 4px; flex: 0 0 4px; background: var(--sev, var(--line-strong)); }
+.sb-card-body { flex: 1; min-width: 0; padding: 10px 14px; }
+.sb-card-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.sb-pill {
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px; color: #0b0f14;
+}
+.sb-pill-critical { background: var(--sev-critical); color: #fff; }
+.sb-pill-urgent   { background: var(--sev-urgent); }
+.sb-pill-warning  { background: var(--sev-warning); }
+.sb-pill-info     { background: var(--sev-info); color: #fff; }
+.sb-kind { font-size: 0.78rem; color: var(--muted); }
+.sb-account {
+  font-size: 0.74rem; color: var(--text); background: var(--panel-4);
+  padding: 2px 8px; border-radius: 999px;
+}
+.sb-time { font-size: 0.74rem; color: var(--muted-2); margin-left: auto; }
+.sb-title { display: block; font-size: 0.95rem; line-height: 1.3; }
+.sb-body { margin: 3px 0 0; font-size: 0.85rem; color: var(--muted); line-height: 1.4; }
+.sb-details { margin: 4px 0 0; font-size: 0.78rem; color: var(--muted-2); }
+.sb-card-actions { display: flex; flex-direction: column; gap: 6px; justify-content: center; padding: 10px 12px; }
+.sb-group { margin-bottom: 14px; }
+
+/* --- "no data is arriving" banner --- */
+.sb-health {
+  display: flex; flex-direction: column; gap: 3px; margin-bottom: 14px;
+  padding: 10px 14px; border-radius: var(--radius);
+  background: rgba(243, 179, 61, 0.1); border: 1px solid rgba(243, 179, 61, 0.35);
+}
+.sb-health span { font-size: 0.84rem; color: var(--muted); }
+
+/* --- the popup stack --- */
+/* Fixed so it follows onto every view, and above the sidebar overlay so it is
+   never hidden behind an open menu on a phone. */
+.sb-popups {
+  position: fixed; top: 14px; right: 14px; z-index: 9000;
+  width: min(390px, calc(100vw - 28px));
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: calc(100vh - 28px); overflow-y: auto;
+}
+.sb-popups-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 11px; border-radius: var(--radius);
+  background: var(--panel-4); border: 1px solid var(--line-strong); box-shadow: var(--shadow);
+}
+.sb-popups-head > div { display: flex; gap: 6px; }
+.sb-card--popup {
+  box-shadow: var(--shadow);
+  background: var(--panel-3);
+  animation: sb-slide-in 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.sb-card--popup .sb-card-actions { flex-direction: row; align-items: center; padding: 8px 10px; }
+@keyframes sb-slide-in {
+  from { opacity: 0; transform: translateX(22px); }
+  to { opacity: 1; transform: none; }
+}
+/* A critical popup pulses its bar once so it reads differently from the rest
+   at a glance, without moving anything on the page. */
+.sb-card--popup.sb-sev-critical .sb-card-bar { animation: sb-pulse 1.4s ease-in-out 3; }
+@keyframes sb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-card--popup, .sb-card--popup.sb-sev-critical .sb-card-bar { animation: none; }
+}
+
+@media (max-width: 720px) {
+  .sb-popups { top: auto; bottom: 10px; right: 10px; left: 10px; width: auto; max-height: 60vh; }
+  .sb-card-actions { flex-direction: row; }
+}

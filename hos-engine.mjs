@@ -116,6 +116,9 @@ async function alertOnRecapCoverage(account, readiness, now) {
       url: "/index.html",
       telegramText,
       telegramFocus: true,
+      kind: "hos-coverage",
+      severity: "critical",
+      meta: { recapId: row.id, driver: row.driverAssigned || null, account: account.name },
     });
     sent += 1;
   }
@@ -148,6 +151,9 @@ async function pollAccount(account) {
           critical: false,
           push: false, // Telegram only
           url: "/index.html",
+          kind: "hos-status",
+          severity: "info",
+          meta: { driver: driver.driverName, from: statusText(prev), to: statusText(cur), account: account.name },
           telegramText: `🔄 HOS status change\nDriver: ${driver.driverName}\n${statusText(prev)} → ${statusText(cur)}\nAccount: ${account.name}`,
         });
         alerts += 1;
@@ -185,6 +191,14 @@ async function pollAccount(account) {
         telegramText,
         // 20-minutes-left on any clock is also copied to the focus group.
         telegramFocus: isUrgent,
+        kind: "hos-risk",
+        // The board keeps the engine's own three tiers rather than flattening
+        // them to critical/not: 20 minutes left is a different problem from 60.
+        severity: isUrgent ? "critical" : (isCritical ? "urgent" : "warning"),
+        meta: {
+          driver: driver.driverName, metric: risk.metric, minutes: risk.minutes,
+          display: risk.display, status: driver.currentStatus, account: account.name,
+        },
       });
       alerts += 1;
     }

@@ -1,7 +1,9 @@
 // notify.mjs — account-aware alert routing (Web Push + Telegram).
 import webpush from "web-push";
 import dotenv from "dotenv";
-import { getAccountCredentials, getSubscriptionsForAccount, deleteSubscriptionByEndpoint } from "./db.mjs";
+import {
+  getAccountCredentials, getSubscriptionsForAccount, deleteSubscriptionByEndpoint, recordAlert,
+} from "./db.mjs";
 dotenv.config();
 
 // Ensure VAPID is configured (idempotent; push.mjs may have set it already).
@@ -77,8 +79,34 @@ export async function sendTelegramToAccount(accountId, text, { focus = false } =
 // Send an alert to an account through both channels.
 // `telegramFocus: true` additionally copies the message to the account's focus
 // group (see sendTelegramToAccount) — it never replaces the main chat.
-export async function notifyAccount(accountId, { title, body, tag, requireInteraction = false, critical = false, url = "/index.html", telegramText, push = true, telegramFocus = false }) {
+// Every alert in the system goes out through here, which makes it the one
+// place that can record them. The superadmin board reads that record: before
+// it existed an alert was sent and then gone, so there was nothing to show.
+//
+// `kind` groups alerts on the board (hos-risk, tour-stopped, bobtail...) and
+// `severity` colours them. They default to something harmless so a caller that
+// has not been updated still files a usable row rather than throwing.
+//
+// Recording must never stop an alert going out: a board that misses a row is a
+// nuisance, an alert that never reaches a dispatcher is the actual failure.
+export async function notifyAccount(accountId, { title, body, tag, requireInteraction = false, critical = false, url = "/index.html", telegramText, push = true, telegramFocus = false, kind = "other", severity, meta = null }) {
   const message = telegramText || `${title}\n${body}`;
+
+  let recorded = null;
+  try {
+    recorded = recordAlert({
+      accountId,
+      kind,
+      severity: severity || (critical ? "critical" : "info"),
+      title,
+      body,
+      dedupeKey: tag,
+      meta: { ...(meta || {}), focus: Boolean(telegramFocus) },
+    });
+  } catch (error) {
+    console.warn("Alert not recorded:", error.message || error);
+  }
+
   const [pushRes, tg, focusTg] = await Promise.allSettled([
     push
       ? sendPushToAccount(accountId, { title, body, tag, requireInteraction: requireInteraction || critical, critical, url })
@@ -89,6 +117,7 @@ export async function notifyAccount(accountId, { title, body, tag, requireIntera
       : Promise.resolve({ ok: false, skipped: "not_focus_alert" }),
   ]);
   return {
+    alertId: recorded ? recorded.id : null,
     push: pushRes.status === "fulfilled" ? pushRes.value : { error: String(pushRes.reason) },
     telegram: tg.status === "fulfilled" ? tg.value : { error: String(tg.reason) },
     telegramFocus: focusTg.status === "fulfilled" ? focusTg.value : { error: String(focusTg.reason) },

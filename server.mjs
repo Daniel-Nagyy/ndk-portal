@@ -20,7 +20,8 @@ import {
   listDownTrucks, getDownTruckById, upsertDownTruck, deleteDownTruck,
   getAccountByApiKey, regenerateApiKey,
   driverSlotOptions, driverSlotMatches, driverSlotHistory, saveDriverShifts, clearDriverShifts,
-  clearLegacyDriverShifts
+  clearLegacyDriverShifts,
+  listAlerts, dismissAlert, dismissAlerts, alertCounts, pruneAlerts
 } from './db.mjs';
 import { blocksFromCsvs } from './trips-import.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
@@ -29,6 +30,7 @@ import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ing
 const alertDedupe = new Map();
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
+import { classifyAlert, kindLabel, kindGroup, ALERT_KINDS } from './alert-kinds.mjs';
 import { startHosEngine } from './hos-engine.mjs';
 import { coverageForRows } from './hos-coverage.mjs';
 import { readinessForAccount } from './readiness-cache.mjs';
@@ -71,6 +73,19 @@ const root = process.cwd();
 const port = Number(process.env.PORT || 4173);
 
 try { seedDriverShifts(root); } catch (e) { console.warn('Driver Slots seed failed:', e.message || e); }
+
+// Alerts accumulate at a few hundred a day across three accounts. Prune at
+// startup and once a day so the table stays small without a migration later.
+function pruneAlertsSafely() {
+  try {
+    const n = pruneAlerts();
+    if (n) console.log(`Alerts: pruned ${n} older than the retention window`);
+  } catch (e) {
+    console.warn('Alert prune failed:', e.message || e);
+  }
+}
+pruneAlertsSafely();
+setInterval(pruneAlertsSafely, 24 * 60 * 60 * 1000).unref?.();
 
 // Run plain HTTP when USE_HTTP=1 (behind a TLS-terminating tunnel or cloud host),
 // otherwise HTTPS with the local self-signed cert for LAN/localhost use.
@@ -544,6 +559,13 @@ const requestHandler = (req, res) => {  // CORS Headers
             return sendJson(200, { success: true, account: account.id, deduped: true });
           }
           alertDedupe.set(`${account.id}:${dedupe}`, now);
+          // The extension posts free text. Work out what it is so the
+          // superadmin board can group bobtails, arrivals/departures and
+          // "he will not have his reset" rather than lumping them as "other".
+          const classified = classifyAlert({
+            title, body: alertBody,
+            kind: body.kind, severity: body.severity, critical: body.critical !== false,
+          });
           const delivery = await notifyAccount(account.id, {
             title,
             body: alertBody,
@@ -552,6 +574,9 @@ const requestHandler = (req, res) => {  // CORS Headers
             url: '/',
             telegramText: `${title}\n${alertBody}`,
             push: body.push !== false, // arrival/departure send push:false → Telegram only
+            kind: classified.kind,
+            severity: classified.severity,
+            meta: { source: 'extension', account: account.name },
           });
           return sendJson(200, { success: true, account: account.id, accountName: account.name, delivery });
         }
@@ -773,6 +798,100 @@ const requestHandler = (req, res) => {  // CORS Headers
       }
     })();
     return;
+  }
+
+  // ---------- Superadmin board: every account's alerts in one place ----------
+  // Only the superadmin sees across accounts. Every other role is scoped to its
+  // own account everywhere else in the portal, and this must not be the hole in
+  // that: a dispatcher reaching these endpoints would read another company's
+  // drivers, so the check is a hard 403 rather than a filtered result.
+  if (url.pathname.startsWith('/api/superadmin/')) {
+    const authUser = getAuthUser(req);
+    if (!authUser) return sendJson(401, { success: false, error: 'Not authenticated' });
+    if (authUser.role !== 'superadmin') {
+      return sendJson(403, { success: false, error: 'Superadmin only' });
+    }
+
+    // The board's whole state in one call: the open alerts, per-account
+    // counts, and whether each account's data is actually arriving. `sinceId`
+    // makes the live poll cheap - it asks only for what it has not seen.
+    if (url.pathname === '/api/superadmin/overview' && req.method === 'GET') {
+      try {
+        const sinceId = url.searchParams.get('sinceId');
+        const accountFilter = (url.searchParams.get('accounts') || '').split(',').map((a) => a.trim()).filter(Boolean);
+        const severityFilter = (url.searchParams.get('severities') || '').split(',').map((a) => a.trim()).filter(Boolean);
+        const kindFilter = (url.searchParams.get('kinds') || '').split(',').map((a) => a.trim()).filter(Boolean);
+
+        const accounts = listAccounts().map((a) => ({ id: a.id, name: a.name }));
+        const alerts = listAlerts({
+          accountIds: accountFilter.length ? accountFilter : null,
+          severities: severityFilter.length ? severityFilter : null,
+          kinds: kindFilter.length ? kindFilter : null,
+          sinceId: sinceId ? Number(sinceId) : null,
+          limit: Number(url.searchParams.get('limit') || 300),
+        });
+
+        // Counts are deliberately NOT filtered: the tiles have to keep showing
+        // that another account is on fire while you are looking at this one.
+        const counts = {};
+        for (const row of alertCounts()) {
+          counts[row.account_id] = counts[row.account_id] || { critical: 0, urgent: 0, warning: 0, info: 0, total: 0 };
+          counts[row.account_id][row.severity] = row.n;
+          counts[row.account_id].total += row.n;
+        }
+
+        const health = accounts.map((a) => ({
+          ...a,
+          ...getIngestStatus(a.id),
+          counts: counts[a.id] || { critical: 0, urgent: 0, warning: 0, info: 0, total: 0 },
+        }));
+
+        return sendJson(200, {
+          success: true,
+          now: new Date().toISOString(),
+          accounts,
+          health,
+          counts,
+          alerts: alerts.map((row) => ({
+            ...row,
+            kindLabel: kindLabel(row.kind),
+            kindGroup: kindGroup(row.kind),
+            accountName: (accounts.find((a) => a.id === row.accountId) || {}).name || row.accountId,
+          })),
+          // The highest id on the board, so the next poll can ask for "after
+          // this" without re-reading everything it already has.
+          maxId: alerts.length ? Math.max(...alerts.map((a) => a.id)) : Number(sinceId || 0),
+          kinds: ALERT_KINDS,
+        });
+      } catch (error) {
+        return sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    }
+
+    if (url.pathname === '/api/superadmin/alerts/dismiss' && req.method === 'POST') {
+      (async () => {
+        try {
+          const body = await readJsonBody(req);
+          if (body.id) {
+            const changed = dismissAlert(body.id, authUser.id);
+            return sendJson(200, { success: true, dismissed: changed });
+          }
+          // Bounded by maxId so "clear all" never swallows an alert that
+          // landed between the render and the click.
+          const changed = dismissAlerts({
+            accountId: body.accountId || null,
+            maxId: body.maxId || null,
+            userId: authUser.id,
+          });
+          return sendJson(200, { success: true, dismissed: changed });
+        } catch (error) {
+          sendJson(400, { success: false, error: simplifyError(error) });
+        }
+      })();
+      return;
+    }
+
+    return sendJson(404, { success: false, error: 'Unknown superadmin endpoint' });
   }
 
   // Driver Slots is limited to dispatchers on Triple J for now. Owners do not
