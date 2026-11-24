@@ -1,4 +1,6 @@
 import { createReadStream, existsSync, statSync, readdirSync } from "node:fs";
+import { timingSafeEqual } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer as createHttpServer } from "node:http";
 import { readFileSync } from "node:fs";import { extname, join, normalize } from "node:path";
@@ -30,7 +32,7 @@ import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ing
 const alertDedupe = new Map();
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
-import { classifyAlert, kindLabel, kindGroup, ALERT_KINDS } from './alert-kinds.mjs';
+import { classifyAlert, kindLabel, kindGroup, ALERT_KINDS, MUTED_KINDS } from './alert-kinds.mjs';
 import { startHosEngine } from './hos-engine.mjs';
 import { coverageForRows } from './hos-coverage.mjs';
 import { readinessForAccount } from './readiness-cache.mjs';
@@ -800,6 +802,75 @@ const requestHandler = (req, res) => {  // CORS Headers
     return;
   }
 
+  // ---------- Board feed for the browser extension ----------
+  // The extension cannot use the session-cookie endpoints below: its fetch is
+  // cross-site, so a SameSite cookie is dropped. It authenticates with
+  // BOARD_TOKEN instead.
+  //
+  // This token crosses account boundaries, which no other key in the system
+  // does, so it is deliberately the narrowest thing that still works: it reads
+  // alerts and dismisses them, and can do nothing else. It is NOT a superadmin
+  // session. Unset, these endpoints are off - never open.
+  if (url.pathname.startsWith('/api/board/')) {
+    const expected = process.env.BOARD_TOKEN || '';
+    if (!expected) {
+      return sendJson(503, { success: false, error: 'BOARD_TOKEN is not set on the server' });
+    }
+    const given = req.headers['x-board-token'] || url.searchParams.get('token') || '';
+    // Length-independent compare would be better still, but a mismatched
+    // length must not throw before the comparison happens.
+    const match = given.length === expected.length
+      && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+    if (!match) return sendJson(401, { success: false, error: 'Bad board token' });
+
+    if (url.pathname === '/api/board/feed' && req.method === 'GET') {
+      try {
+        const sinceId = url.searchParams.get('sinceId');
+        const includeStatus = url.searchParams.get('includeStatusChanges') === '1';
+        const accounts = listAccounts().map((a) => ({ id: a.id, name: a.name }));
+        const alerts = listAlerts({
+          excludeKinds: includeStatus ? [] : MUTED_KINDS,
+          sinceId: sinceId ? Number(sinceId) : null,
+          limit: Number(url.searchParams.get('limit') || 50),
+        });
+        return sendJson(200, {
+          success: true,
+          now: new Date().toISOString(),
+          alerts: alerts.map((row) => ({
+            id: row.id,
+            accountId: row.accountId,
+            accountName: (accounts.find((a) => a.id === row.accountId) || {}).name || row.accountId,
+            kind: row.kind,
+            kindLabel: kindLabel(row.kind),
+            severity: row.severity,
+            title: row.title,
+            body: row.body,
+            createdAt: row.createdAt,
+          })),
+          maxId: alerts.length ? Math.max(...alerts.map((a) => a.id)) : Number(sinceId || 0),
+        });
+      } catch (error) {
+        return sendJson(500, { success: false, error: simplifyError(error) });
+      }
+    }
+
+    if (url.pathname === '/api/board/dismiss' && req.method === 'POST') {
+      (async () => {
+        try {
+          const body = await readJsonBody(req);
+          if (!body.id) return sendJson(400, { success: false, error: 'id is required' });
+          const changed = dismissAlert(body.id, 'extension');
+          sendJson(200, { success: true, dismissed: changed });
+        } catch (error) {
+          sendJson(400, { success: false, error: simplifyError(error) });
+        }
+      })();
+      return;
+    }
+
+    return sendJson(404, { success: false, error: 'Unknown board endpoint' });
+  }
+
   // ---------- Superadmin board: every account's alerts in one place ----------
   // Only the superadmin sees across accounts. Every other role is scoped to its
   // own account everywhere else in the portal, and this must not be the hole in
@@ -822,11 +893,18 @@ const requestHandler = (req, res) => {  // CORS Headers
         const severityFilter = (url.searchParams.get('severities') || '').split(',').map((a) => a.trim()).filter(Boolean);
         const kindFilter = (url.searchParams.get('kinds') || '').split(',').map((a) => a.trim()).filter(Boolean);
 
+        // Duty-status changes fire on every driver every time they touch the
+        // switch - by far the highest volume alert and almost never actionable,
+        // so they are off unless explicitly asked for. They are still recorded.
+        const includeStatus = url.searchParams.get('includeStatusChanges') === '1';
+        const hidden = includeStatus ? [] : MUTED_KINDS;
+
         const accounts = listAccounts().map((a) => ({ id: a.id, name: a.name }));
         const alerts = listAlerts({
           accountIds: accountFilter.length ? accountFilter : null,
           severities: severityFilter.length ? severityFilter : null,
           kinds: kindFilter.length ? kindFilter : null,
+          excludeKinds: hidden,
           sinceId: sinceId ? Number(sinceId) : null,
           limit: Number(url.searchParams.get('limit') || 300),
         });
@@ -834,7 +912,7 @@ const requestHandler = (req, res) => {  // CORS Headers
         // Counts are deliberately NOT filtered: the tiles have to keep showing
         // that another account is on fire while you are looking at this one.
         const counts = {};
-        for (const row of alertCounts()) {
+        for (const row of alertCounts(hidden)) {
           counts[row.account_id] = counts[row.account_id] || { critical: 0, urgent: 0, warning: 0, info: 0, total: 0 };
           counts[row.account_id][row.severity] = row.n;
           counts[row.account_id].total += row.n;

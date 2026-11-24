@@ -1354,7 +1354,11 @@ setInterval(() => { if (session) refreshAllData(false); }, 90000);
   let superFilterAccounts = new Set();   // empty = every account
   let superFilterSeverities = new Set(); // empty = every severity
   let superPopups = [];
-  let superPopupsMuted = false;
+  // Off by default: the browser extension raises these as desktop
+  // notifications, which appear over whatever you are doing instead of only
+  // inside an open Portal tab. Two sets of popups for the same alert is noise,
+  // so the in-page ones are opt-in for anyone not running the extension.
+  let superPopupsMuted = true;
   let superSound = false;
   let superTimer = null;
   let superLoading = false;
@@ -5506,7 +5510,7 @@ function renderRecapPage(user) {
             ${superSound ? "\ud83d\udd0a Sound on" : "\ud83d\udd07 Sound off"}
           </button>
           <button class="btn btn-secondary" type="button" data-action="super-popup-mute">
-            ${superPopupsMuted ? "Popups muted" : "Popups on"}
+            ${superPopupsMuted ? "In-page popups off" : "In-page popups on"}
           </button>
           <button class="btn btn-secondary" type="button" data-action="super-refresh">Refresh</button>
           ${visible.length ? `<button class="btn btn-primary" type="button" data-action="super-clear-all">Clear ${visible.length}</button>` : ""}
@@ -7464,7 +7468,9 @@ case "hos-close-filters":
       case "super-popup-mute":
         superPopupsMuted = !superPopupsMuted;
         if (superPopupsMuted) superPopups = [];
-        showToast(superPopupsMuted ? "Popups muted — alerts still land on the board." : "Popups on.");
+        showToast(superPopupsMuted
+          ? "In-page popups off — the extension still raises desktop notifications."
+          : "In-page popups on.");
         render();
         break;
 

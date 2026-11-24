@@ -292,7 +292,7 @@ function shapeAlert(row) {
 // The board's feed. `sinceId` is what the live poll uses: it asks only for what
 // it has not seen, so a quiet minute costs one empty query.
 export function listAlerts({
-  accountIds = null, kinds = null, severities = null,
+  accountIds = null, kinds = null, severities = null, excludeKinds = null,
   sinceId = null, includeDismissed = false, limit = 200,
 } = {}) {
   const where = [];
@@ -308,6 +308,13 @@ export function listAlerts({
   if (accountIds) inClause("account_id", accountIds);
   if (kinds) inClause("kind", kinds);
   if (severities) inClause("severity", severities);
+  if (excludeKinds) {
+    const list = [...excludeKinds].filter(Boolean);
+    if (list.length) {
+      where.push(`kind NOT IN (${list.map(() => "?").join(",")})`);
+      args.push(...list);
+    }
+  }
 
   const sql = `SELECT * FROM alerts${where.length ? ` WHERE ${where.join(" AND ")}` : ""}
                ORDER BY id DESC LIMIT ?`;
@@ -335,11 +342,15 @@ export function dismissAlerts({ accountId = null, maxId = null, userId } = {}) {
 }
 
 // Open alerts per account per severity, for the board's header tiles.
-export function alertCounts() {
+// Counts must agree with the feed, or a tile says 7 while 5 are listed and the
+// missing two are unfindable. Same exclusion, same answer.
+export function alertCounts(excludeKinds = null) {
+  const list = (excludeKinds || []).filter(Boolean);
+  const clause = list.length ? ` AND kind NOT IN (${list.map(() => "?").join(",")})` : "";
   return db
     .prepare(`SELECT account_id, severity, COUNT(*) AS n FROM alerts
-              WHERE dismissed_at IS NULL GROUP BY account_id, severity`)
-    .all();
+              WHERE dismissed_at IS NULL${clause} GROUP BY account_id, severity`)
+    .all(...list);
 }
 
 export function pruneAlerts() {

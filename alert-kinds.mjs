@@ -28,6 +28,13 @@ export const ALERT_KINDS = {
 
 export const KIND_GROUPS = ["hos", "tour", "yard", "safety", "system", "other"];
 
+// Recorded, but not shown and never popped up. A duty-status change fires for
+// every driver every time they touch the switch: it is the highest-volume
+// alert in the system and almost never something anyone acts on, so it buries
+// the alerts that are. Still written to the table, so the history is intact
+// and a filter can bring it back.
+export const MUTED_KINDS = ["hos-status"];
+
 export function kindLabel(kind) {
   return (ALERT_KINDS[kind] || ALERT_KINDS.other).label;
 }
