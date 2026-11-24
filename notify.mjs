@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import {
   getAccountCredentials, getSubscriptionsForAccount, deleteSubscriptionByEndpoint, recordAlert,
 } from "./db.mjs";
+import { MUTED_KINDS } from "./alert-kinds.mjs";
 dotenv.config();
 
 // Ensure VAPID is configured (idempotent; push.mjs may have set it already).
@@ -92,19 +93,25 @@ export async function sendTelegramToAccount(accountId, text, { focus = false } =
 export async function notifyAccount(accountId, { title, body, tag, requireInteraction = false, critical = false, url = "/index.html", telegramText, push = true, telegramFocus = false, kind = "other", severity, meta = null }) {
   const message = telegramText || `${title}\n${body}`;
 
+  // Muted kinds are never shown on the board, so there is nothing to gain by
+  // storing them. Duty-status changes alone are a few hundred rows a day that
+  // no one ever reads. They still go out over Telegram exactly as before -
+  // this drops the row, not the alert.
   let recorded = null;
-  try {
-    recorded = recordAlert({
-      accountId,
-      kind,
-      severity: severity || (critical ? "critical" : "info"),
-      title,
-      body,
-      dedupeKey: tag,
-      meta: { ...(meta || {}), focus: Boolean(telegramFocus) },
-    });
-  } catch (error) {
-    console.warn("Alert not recorded:", error.message || error);
+  if (!MUTED_KINDS.includes(kind)) {
+    try {
+      recorded = recordAlert({
+        accountId,
+        kind,
+        severity: severity || (critical ? "critical" : "info"),
+        title,
+        body,
+        dedupeKey: tag,
+        meta: { ...(meta || {}), focus: Boolean(telegramFocus) },
+      });
+    } catch (error) {
+      console.warn("Alert not recorded:", error.message || error);
+    }
   }
 
   const [pushRes, tg, focusTg] = await Promise.allSettled([

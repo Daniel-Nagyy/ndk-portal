@@ -948,9 +948,9 @@ const requestHandler = (req, res) => {  // CORS Headers
         const severityFilter = (url.searchParams.get('severities') || '').split(',').map((a) => a.trim()).filter(Boolean);
         const kindFilter = (url.searchParams.get('kinds') || '').split(',').map((a) => a.trim()).filter(Boolean);
 
-        // Duty-status changes fire on every driver every time they touch the
-        // switch - by far the highest volume alert and almost never actionable,
-        // so they are off unless explicitly asked for. They are still recorded.
+        // Muted kinds (duty-status changes, arrivals) are no longer written to
+        // the table at all, so this only still matters for rows stored before
+        // that change. Harmless to keep: old clients send it.
         const includeStatus = url.searchParams.get('includeStatusChanges') === '1';
         const hidden = includeStatus ? [] : MUTED_KINDS;
 
