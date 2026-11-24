@@ -26,6 +26,10 @@ export const ALERT_KINDS = {
   departure: { label: "Departure", group: "tour" },
   late: { label: "Late", group: "tour" },
   netradyne: { label: "Netradyne", group: "safety" },
+  // Everything else Netradyne reports: harsh braking, speeding, following
+  // distance and so on. Still sent to the account's main Telegram chat, but
+  // not put on the board -- the board carries what the focus group carries.
+  "netradyne-routine": { label: "Netradyne (routine)", group: "safety" },
   system: { label: "System", group: "system" },
   other: { label: "Alert", group: "other" },
 };
@@ -37,7 +41,7 @@ export const KIND_GROUPS = ["hos", "tour", "yard", "safety", "upcoming", "system
 // alert in the system and almost never something anyone acts on, so it buries
 // the alerts that are. Still written to the table, so the history is intact
 // and a filter can bring it back.
-export const MUTED_KINDS = ["hos-status", "arrival"];
+export const MUTED_KINDS = ["hos-status", "netradyne-routine"];
 
 // What to read first. A clock about to run out needs a decision in the next
 // few minutes; a driver who will not have finished resetting by tomorrow's
@@ -51,10 +55,11 @@ const KIND_PRIORITY = {
   netradyne: 4,
   late: 5,
   system: 6,
+  arrival: 7,
   departure: 7,
   "hos-coverage": 8,    // the block ahead is not covered
   "hos-reset": 9,       // the reset will not be done in time for an upcoming tour
-  arrival: 10,
+  "netradyne-routine": 10,
   "hos-status": 11,
   other: 12,
 };

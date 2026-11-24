@@ -31,7 +31,10 @@ export async function notifyAlerts(account, alerts) {
     ].join('\n');
 
     // Roadside parking / distraction / drowsiness are also copied to the
-    // account's focus group, if it has one.
+    // account's focus group, if it has one -- and they are the only Netradyne
+    // alerts the board carries. Everything else (harsh braking, speeding,
+    // following distance) still reaches the main Telegram chat, but files
+    // under a muted kind so it is neither stored nor shown.
     const focus = isFocusAlert(alert);
 
     try {
@@ -42,6 +45,14 @@ export async function notifyAlerts(account, alerts) {
         url: '/index.html',
         telegramText,
         telegramFocus: focus,
+        kind: focus ? 'netradyne' : 'netradyne-routine',
+        severity: focus ? 'urgent' : 'info',
+        meta: {
+          driver: alert.driverName || null,
+          vehicle: alert.vehicleNumber || null,
+          event: alert.eventType || null,
+          account: account.name,
+        },
       });
       log.info(`[${account.id}] routed Netradyne alert ${alert.externalAlertId}${focus ? ' (+focus group)' : ''}`);
     } catch (e) {
