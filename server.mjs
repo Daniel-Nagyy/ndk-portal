@@ -833,15 +833,29 @@ const requestHandler = (req, res) => {  // CORS Headers
           sinceId: sinceId ? Number(sinceId) : null,
           limit: Number(url.searchParams.get('limit') || 50),
         });
+        // The board PAGE needs the account list and the per-account counts to
+        // draw its tiles; the notification watcher ignores both. Sending them
+        // costs one extra query and saves the page a second round trip.
+        const counts = {};
+        for (const row of alertCounts(includeStatus ? [] : MUTED_KINDS)) {
+          counts[row.account_id] = counts[row.account_id]
+            || { critical: 0, urgent: 0, warning: 0, info: 0, total: 0 };
+          counts[row.account_id][row.severity] = row.n;
+          counts[row.account_id].total += row.n;
+        }
+
         return sendJson(200, {
           success: true,
           now: new Date().toISOString(),
+          accounts,
+          counts,
           alerts: alerts.map((row) => ({
             id: row.id,
             accountId: row.accountId,
             accountName: (accounts.find((a) => a.id === row.accountId) || {}).name || row.accountId,
             kind: row.kind,
             kindLabel: kindLabel(row.kind),
+            kindGroup: kindGroup(row.kind),
             severity: row.severity,
             title: row.title,
             body: row.body,
