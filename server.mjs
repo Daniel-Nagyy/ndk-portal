@@ -23,7 +23,7 @@ import {
   getAccountByApiKey, regenerateApiKey,
   driverSlotOptions, driverSlotMatches, driverSlotHistory, saveDriverShifts, clearDriverShifts,
   clearLegacyDriverShifts,
-  listAlerts, dismissAlert, dismissAlerts, alertCounts, pruneAlerts
+  listAlerts, getAlert, dismissAlert, dismissAlerts, alertCounts, pruneAlerts
 } from './db.mjs';
 import { blocksFromCsvs } from './trips-import.mjs';
 import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ingest-store.mjs';
@@ -32,7 +32,9 @@ import { setLateItems, getLateItems, getIngestStatus, setSiteState } from './ing
 const alertDedupe = new Map();
 import { getAuthUser, getSessionToken, sessionCookie, clearSessionCookie, canAccessAccount } from './auth.mjs';
 import { computeReadiness } from './geotab.mjs';
-import { classifyAlert, kindLabel, kindGroup, ALERT_KINDS, MUTED_KINDS } from './alert-kinds.mjs';
+import {
+  classifyAlert, kindLabel, kindGroup, ALERT_KINDS, MUTED_KINDS, kindPriority, compareAlerts,
+} from './alert-kinds.mjs';
 import { startHosEngine } from './hos-engine.mjs';
 import { coverageForRows } from './hos-coverage.mjs';
 import { readinessForAccount } from './readiness-cache.mjs';
@@ -812,23 +814,49 @@ const requestHandler = (req, res) => {  // CORS Headers
   // alerts and dismisses them, and can do nothing else. It is NOT a superadmin
   // session. Unset, these endpoints are off - never open.
   if (url.pathname.startsWith('/api/board/')) {
-    const expected = process.env.BOARD_TOKEN || '';
-    if (!expected) {
-      return sendJson(503, { success: false, error: 'BOARD_TOKEN is not set on the server' });
+    // Two ways in, and the difference is the whole point:
+    //
+    //   an account API key  -> that one account's alerts. This is what the
+    //                          extension uses: it holds one key per account,
+    //                          so no single credential crosses the boundary
+    //                          and a leaked key exposes one company.
+    //   BOARD_TOKEN         -> every account at once. Only worth setting where
+    //                          one request really must span accounts.
+    //
+    // Account keys are preferred for exactly that reason, and the scope is
+    // carried through to dismissing as well as reading.
+    let scopedAccounts = null;   // null = every account
+
+    const apiKey = req.headers['x-api-key'] || url.searchParams.get('apiKey') || '';
+    const boardToken = req.headers['x-board-token'] || url.searchParams.get('token') || '';
+
+    if (apiKey) {
+      const acct = getAccountByApiKey(apiKey);
+      if (!acct) return sendJson(401, { success: false, error: 'Invalid API key' });
+      scopedAccounts = [acct.id];
+    } else {
+      const expected = process.env.BOARD_TOKEN || '';
+      if (!expected) {
+        return sendJson(503, {
+          success: false,
+          error: 'Send an account API key as X-API-Key, or set BOARD_TOKEN on the server for cross-account access.',
+        });
+      }
+      // A mismatched length must not throw before the comparison happens.
+      const match = boardToken.length === expected.length
+        && timingSafeEqual(Buffer.from(boardToken), Buffer.from(expected));
+      if (!match) return sendJson(401, { success: false, error: 'Bad board token' });
     }
-    const given = req.headers['x-board-token'] || url.searchParams.get('token') || '';
-    // Length-independent compare would be better still, but a mismatched
-    // length must not throw before the comparison happens.
-    const match = given.length === expected.length
-      && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
-    if (!match) return sendJson(401, { success: false, error: 'Bad board token' });
 
     if (url.pathname === '/api/board/feed' && req.method === 'GET') {
       try {
         const sinceId = url.searchParams.get('sinceId');
         const includeStatus = url.searchParams.get('includeStatusChanges') === '1';
-        const accounts = listAccounts().map((a) => ({ id: a.id, name: a.name }));
+        const accounts = listAccounts()
+          .filter((a) => !scopedAccounts || scopedAccounts.includes(a.id))
+          .map((a) => ({ id: a.id, name: a.name }));
         const alerts = listAlerts({
+          accountIds: scopedAccounts,
           excludeKinds: includeStatus ? [] : MUTED_KINDS,
           sinceId: sinceId ? Number(sinceId) : null,
           limit: Number(url.searchParams.get('limit') || 50),
@@ -838,6 +866,7 @@ const requestHandler = (req, res) => {  // CORS Headers
         // costs one extra query and saves the page a second round trip.
         const counts = {};
         for (const row of alertCounts(includeStatus ? [] : MUTED_KINDS)) {
+          if (scopedAccounts && !scopedAccounts.includes(row.account_id)) continue;
           counts[row.account_id] = counts[row.account_id]
             || { critical: 0, urgent: 0, warning: 0, info: 0, total: 0 };
           counts[row.account_id][row.severity] = row.n;
@@ -857,10 +886,11 @@ const requestHandler = (req, res) => {  // CORS Headers
             kindLabel: kindLabel(row.kind),
             kindGroup: kindGroup(row.kind),
             severity: row.severity,
+            priority: kindPriority(row.kind),
             title: row.title,
             body: row.body,
             createdAt: row.createdAt,
-          })),
+          })).sort(compareAlerts),
           maxId: alerts.length ? Math.max(...alerts.map((a) => a.id)) : Number(sinceId || 0),
         });
       } catch (error) {
@@ -873,6 +903,17 @@ const requestHandler = (req, res) => {  // CORS Headers
         try {
           const body = await readJsonBody(req);
           if (!body.id) return sendJson(400, { success: false, error: 'id is required' });
+
+          // An account key must not clear another company's alert. Without
+          // this, handing a dispatcher their own key would let them dismiss
+          // anything on the board by guessing an id.
+          if (scopedAccounts) {
+            const alert = getAlert(Number(body.id));
+            if (!alert || !scopedAccounts.includes(alert.accountId)) {
+              return sendJson(404, { success: false, error: 'No such alert for this account' });
+            }
+          }
+
           const changed = dismissAlert(body.id, 'extension');
           sendJson(200, { success: true, dismissed: changed });
         } catch (error) {

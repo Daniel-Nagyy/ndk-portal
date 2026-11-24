@@ -12,8 +12,12 @@
 
 export const ALERT_KINDS = {
   "hos-risk": { label: "HOS clock", group: "hos" },
-  "hos-coverage": { label: "HOS won't cover the block", group: "hos" },
-  "hos-reset": { label: "HOS won't reset", group: "hos" },
+  // Their own group, not "hos". Both are about a tour that has not started
+  // yet, so they belong at the bottom - but grouping them with the live clock
+  // alerts dragged them straight back to the top, because a group is drawn
+  // where its most urgent member falls.
+  "hos-coverage": { label: "HOS won't cover the block", group: "upcoming" },
+  "hos-reset": { label: "HOS won't reset", group: "upcoming" },
   "hos-status": { label: "Duty status change", group: "hos" },
   "tour-offduty": { label: "Off duty at a stop", group: "tour" },
   "tour-stopped": { label: "Stopped outside a site", group: "tour" },
@@ -26,14 +30,50 @@ export const ALERT_KINDS = {
   other: { label: "Alert", group: "other" },
 };
 
-export const KIND_GROUPS = ["hos", "tour", "yard", "safety", "system", "other"];
+export const KIND_GROUPS = ["hos", "tour", "yard", "safety", "upcoming", "system", "other"];
 
 // Recorded, but not shown and never popped up. A duty-status change fires for
 // every driver every time they touch the switch: it is the highest-volume
 // alert in the system and almost never something anyone acts on, so it buries
 // the alerts that are. Still written to the table, so the history is intact
 // and a filter can bring it back.
-export const MUTED_KINDS = ["hos-status"];
+export const MUTED_KINDS = ["hos-status", "arrival"];
+
+// What to read first. A clock about to run out needs a decision in the next
+// few minutes; a driver who will not have finished resetting by tomorrow's
+// tour is worth knowing and worth knowing LAST, because nothing is on fire.
+// Both are "HOS", which is exactly why kind, not group, decides the order.
+const KIND_PRIORITY = {
+  "hos-risk": 0,        // 20/30/60 minutes left on a live clock
+  "tour-offduty": 1,
+  "tour-stopped": 2,
+  bobtail: 3,
+  netradyne: 4,
+  late: 5,
+  system: 6,
+  departure: 7,
+  "hos-coverage": 8,    // the block ahead is not covered
+  "hos-reset": 9,       // the reset will not be done in time for an upcoming tour
+  arrival: 10,
+  "hos-status": 11,
+  other: 12,
+};
+
+export function kindPriority(kind) {
+  return KIND_PRIORITY[kind] == null ? KIND_PRIORITY.other : KIND_PRIORITY[kind];
+}
+
+// Severity first, then how urgent the kind is, then newest. Sorting by
+// severity alone would float an info-level arrival above a warning.
+const SEVERITY_ORDER = { critical: 0, urgent: 1, warning: 2, info: 3 };
+
+export function compareAlerts(a, b) {
+  const sev = (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9);
+  if (sev) return sev;
+  const kind = kindPriority(a.kind) - kindPriority(b.kind);
+  if (kind) return kind;
+  return (b.id || 0) - (a.id || 0);
+}
 
 export function kindLabel(kind) {
   return (ALERT_KINDS[kind] || ALERT_KINDS.other).label;
